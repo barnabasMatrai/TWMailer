@@ -1,31 +1,68 @@
 #ifndef TWMAILERSERVER_HPP
 #define TWMAILERSERVER_HPP
 
-#include <netinet/in.h>
+#include "MailStore.hpp"
+#include "Utils.hpp"
 
-constexpr int BUF = 1024;
-constexpr int PORT = 6543;
+#include <iostream>
+#include <string>
+#include <cstring>
+#include <csignal>
+#include <cstdlib>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sstream>
+#include <vector>
+
+using std::cout;
+using std::cerr;
+using std::endl;
+
+using std::string;
+using std::stoul;
+using std::vector;
+
+using std::memset;
+using std::ostringstream;
 
 class TWMailerServer {
 public:
-    TWMailerServer();
+    // Constructor & destructor
+    TWMailerServer(int port, const string& spoolDir);
     ~TWMailerServer();
 
+    // Run main accept loop
     int run();
 
-private:
-    static inline int abortRequested = 0;
-    static inline int create_socket = -1;
-    static inline int new_socket = -1;
-
+    // Signal handler for graceful shutdown
     static void signalHandler(int sig);
-    static void* clientCommunication(void* data);
 
+private:
+    // Class-level shared sockets (for signal handling)
+    static volatile sig_atomic_t abortRequested;
+    static int create_socket;
+    static int new_socket;
+
+    // Instance data
+    int port;
+    string mailSpoolDir;
+    MailStore store;
+
+    // Setup helpers
     void setupSignalHandler();
     void createSocket();
     void setSocketOptions();
     void bindSocket();
     void listenSocket();
+
+    // Client communication and protocol handling
+    void* clientCommunication(void* data);
+    bool readDotTerminatedBody(int sockfd, string& body);
+    void handleSend(int clientfd);
+    void handleList(int clientfd);
+    void handleRead(int clientfd);
+    void handleDel(int clientfd);
 };
 
 #endif

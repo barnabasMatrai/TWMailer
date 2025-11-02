@@ -1,51 +1,56 @@
-# Compiler and flags
-CXX := g++
-CXXFLAGS := -Wall -Wextra -std=c++17 -g -O0 -Iinclude
+# ****************************************************
+# Simple Makefile for TW-Mailer
+# ****************************************************
 
-# Directories
-SRC_DIR := src
-OBJ_DIR := obj
-BIN_DIR := bin
+CC = g++
+CFLAGS = -std=c++17 -Wall -g -Iinclude
 
+# ****************************************************
 # Targets
-CLIENT := $(BIN_DIR)/twmailer-client
-SERVER := $(BIN_DIR)/twmailer-server
+# ****************************************************
+all: bin/twmailer-server bin/twmailer-client
 
-# Source files
-CLIENT_SRC := $(SRC_DIR)/TWMailerClient.cpp twmailer-client.cpp
-SERVER_SRC := $(SRC_DIR)/TWMailerServer.cpp twmailer-server.cpp
+# ----------------------------------------------------
+# Server build
+# ----------------------------------------------------
+bin/twmailer-server: obj/twmailer-server.o obj/TWMailerServer.o obj/MailStore.o obj/Utils.o | bin
+	$(CC) $(CFLAGS) -o bin/twmailer-server obj/twmailer-server.o obj/TWMailerServer.o obj/MailStore.o obj/Utils.o
 
-# Object files (placed in obj/)
-CLIENT_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(CLIENT_SRC))
-SERVER_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SERVER_SRC))
+obj/twmailer-server.o: src/twmailer-server.cpp include/TWMailerServer.hpp include/MailStore.hpp include/Utils.hpp | obj
+	$(CC) $(CFLAGS) -c src/twmailer-server.cpp -o obj/twmailer-server.o
 
-# Default target
-all: $(CLIENT) $(SERVER)
+obj/TWMailerServer.o: src/TWMailerServer.cpp include/TWMailerServer.hpp include/MailStore.hpp include/Utils.hpp | obj
+	$(CC) $(CFLAGS) -c src/TWMailerServer.cpp -o obj/TWMailerServer.o
 
-# Build client executable
-$(CLIENT): $(CLIENT_OBJ)
-	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+obj/MailStore.o: src/MailStore.cpp include/MailStore.hpp | obj
+	$(CC) $(CFLAGS) -c src/MailStore.cpp -o obj/MailStore.o
 
-# Build server executable
-$(SERVER): $(SERVER_OBJ)
-	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+obj/Utils.o: src/Utils.cpp include/Utils.hpp | obj
+	$(CC) $(CFLAGS) -c src/Utils.cpp -o obj/Utils.o
 
-# Pattern rule for compiling .cpp -> .o
-$(OBJ_DIR)/%.o: %.cpp
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# ----------------------------------------------------
+# Client build
+# ----------------------------------------------------
+bin/twmailer-client: obj/twmailer-client.o obj/TWMailerClient.o obj/Utils.o | bin
+	$(CC) $(CFLAGS) -o bin/twmailer-client obj/twmailer-client.o obj/TWMailerClient.o obj/Utils.o
 
-# Clean object and binary files
+obj/twmailer-client.o: src/twmailer-client.cpp include/TWMailerClient.hpp include/Utils.hpp | obj
+	$(CC) $(CFLAGS) -c src/twmailer-client.cpp -o obj/twmailer-client.o
+
+obj/TWMailerClient.o: src/TWMailerClient.cpp include/TWMailerClient.hpp include/Utils.hpp | obj
+	$(CC) $(CFLAGS) -c src/TWMailerClient.cpp -o obj/TWMailerClient.o
+
+# ----------------------------------------------------
+# Folder creation
+# ----------------------------------------------------
+obj:
+	mkdir -p obj
+
+bin:
+	mkdir -p bin
+
+# ----------------------------------------------------
+# Clean target
+# ----------------------------------------------------
 clean:
-	rm -rf $(OBJ_DIR) $(BIN_DIR)
-
-# Convenience shortcuts
-run-client: $(CLIENT)
-	./$(CLIENT)
-
-run-server: $(SERVER)
-	./$(SERVER)
-
-.PHONY: all clean run-client run-server
+	rm -f obj/*.o bin/twmailer-server bin/twmailer-client
