@@ -1,20 +1,29 @@
 #include "TWMailerServer.hpp"
+#include "Utils.hpp"
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <arpa/inet.h>
+#include <cstring>
+#include <signal.h>
+#include <unistd.h>
 
 volatile sig_atomic_t TWMailerServer::abortRequested = 0;
-int TWMailerServer::create_socket = -1;
-int TWMailerServer::new_socket = -1;
 
-TWMailerServer::TWMailerServer(int port, const string& spoolDir)
-    : port(port), mailSpoolDir(spoolDir), store(spoolDir) {
+TWMailerServer::TWMailerServer(int port_, const std::string& spoolDir)
+    : port(port_), mailSpoolDir(spoolDir), store(spoolDir),
+      authManager("ldap://ldap.technikum.wien.at", "dc=technikum-wien,dc=at", spoolDir + "/blacklist.db"),
+      create_socket(-1)
+{
     setupSignalHandler();
     createSocket();
     setSocketOptions();
     bindSocket();
     listenSocket();
 
-    string err;
+    std::string err;
     if (!store.ensure_spool_ok(err)) {
-        cerr << "Mail spool setup failed: " << err << endl;
+        std::cerr << "Mail spool setup failed: " << err << std::endl;
         exit(EXIT_FAILURE);
     }
 }
@@ -48,10 +57,6 @@ void TWMailerServer::setSocketOptions() {
         perror("setsockopt SO_REUSEADDR");
         exit(EXIT_FAILURE);
     }
-    if (setsockopt(create_socket, SOL_SOCKET, SO_REUSEPORT, &reuseValue, sizeof(reuseValue)) == -1) {
-        perror("setsockopt SO_REUSEPORT");
-        exit(EXIT_FAILURE);
-    }
 }
 
 void TWMailerServer::bindSocket() {
@@ -68,7 +73,7 @@ void TWMailerServer::bindSocket() {
 }
 
 void TWMailerServer::listenSocket() {
-    if (listen(create_socket, 5) == -1) {
+    if (listen(create_socket, 16) == -1) {
         perror("listen");
         exit(EXIT_FAILURE);
     }
@@ -79,100 +84,124 @@ int TWMailerServer::run() {
     socklen_t addrlen = sizeof(cliaddress);
 
     while (!abortRequested) {
-        cout << "Waiting for connections..." << endl;
+        std::cout << "Waiting for connections..." << std::endl;
 
-        new_socket = accept(create_socket, reinterpret_cast<sockaddr*>(&cliaddress), &addrlen);
+        int new_socket = accept(create_socket, reinterpret_cast<sockaddr*>(&cliaddress), &addrlen);
         if (new_socket == -1) {
             if (abortRequested) perror("accept after abort");
             else perror("accept");
             continue;
         }
 
-        cout << "Client connected from "
-                  << inet_ntoa(cliaddress.sin_addr)
-                  << ":" << ntohs(cliaddress.sin_port)
-                  << endl;
+        std::string client_ip = inet_ntoa(cliaddress.sin_addr);
+        int client_port = ntohs(cliaddress.sin_port);
 
-        clientCommunication(&new_socket);
+        std::cout << "Client connected from " << client_ip << ":" << client_port << std::endl;
 
-        if (new_socket != -1) {
-            shutdown(new_socket, SHUT_RDWR);
-            close(new_socket);
-            new_socket = -1;
-        }
-
-        cout << "Client disconnected." << endl;
+        std::thread worker(&TWMailerServer::clientThread, this, new_socket, client_ip);
+        worker.detach();
     }
 
     return EXIT_SUCCESS;
 }
 
-// -----------------------------
-// CLIENT COMMUNICATION
-// -----------------------------
-void* TWMailerServer::clientCommunication(void* data) {
-    int* sock = static_cast<int*>(data);
-    int clientfd = *sock;
-    string line;
+void TWMailerServer::clientThread(int clientfd, std::string client_ip) {
+    bool authenticated = false;
+    std::string session_user;
 
+    // welcome
+    send_all(clientfd, "OK\n");
+
+    if (authManager.is_ip_blacklisted(client_ip)) {
+        send_all(clientfd, "ERR\n");
+        close(clientfd);
+        return;
+    }
+
+    std::string line;
     while (!abortRequested) {
         if (!recv_line(clientfd, line)) break;
-        string cmd = trim_newline(line);
+        std::string cmd = trim_newline(line);
 
-        if (cmd == "SEND") {
-            handleSend(clientfd);
-        } else if (cmd == "LIST") {
-            handleList(clientfd);
-        } else if (cmd == "READ") {
-            handleRead(clientfd);
-        } else if (cmd == "DEL") {
-            handleDel(clientfd);
+        if (cmd == "LOGIN") {
+            std::string username, password;
+            if (!recv_line(clientfd, username) || !recv_line(clientfd, password)) {
+                send_all(clientfd, "ERR\n");
+                continue;
+            }
+            username = trim_newline(username);
+            password = trim_newline(password);
+
+            if (authManager.is_ip_blacklisted(client_ip)) {
+                send_all(clientfd, "ERR\n");
+                continue;
+            }
+
+            std::string err;
+            if (authManager.authenticate(username, password, client_ip, err)) {
+                authenticated = true;
+                session_user = username;
+                send_all(clientfd, "OK\n");
+            } else {
+                send_all(clientfd, "ERR\n");
+            }
         } else if (cmd == "QUIT") {
+            send_all(clientfd, "OK\n");
             break;
         } else {
-            send_all(clientfd, "ERR\n");
+            if (!authenticated) {
+                send_all(clientfd, "ERR\n");
+                continue;
+            }
+
+            if (cmd == "SEND") {
+                handleSendAuthenticated(clientfd, session_user);
+            } else if (cmd == "LIST") {
+                handleListAuthenticated(clientfd, session_user);
+            } else if (cmd == "READ") {
+                handleReadAuthenticated(clientfd, session_user);
+            } else if (cmd == "DEL") {
+                handleDelAuthenticated(clientfd, session_user);
+            } else {
+                send_all(clientfd, "ERR\n");
+            }
         }
     }
 
-    return nullptr;
+    shutdown(clientfd, SHUT_RDWR);
+    close(clientfd);
+    std::cout << "Client (" << client_ip << ") disconnected." << std::endl;
 }
 
-// -----------------------------
-// COMMAND HANDLERS
-// -----------------------------
-bool TWMailerServer::readDotTerminatedBody(int sockfd, string& body) {
+bool TWMailerServer::readDotTerminatedBody(int sockfd, std::string& body) {
     body.clear();
-    string line;
+    std::string line;
     bool first = true;
-    
     while (true) {
         if (!recv_line(sockfd, line)) {
             return false;
         }
-        if (line == ".") {
+        if (line == ".\n" || line == ".\r\n") {
             break;
         }
-        if (!first) {
-            body += "\n";
-        }
-        body += line;
+        std::string t = trim_newline(line);
+        if (!first) body += "\n";
+        body += t;
         first = false;
     }
-
     return true;
 }
 
-void TWMailerServer::handleSend(int clientfd) {
-    string sender, receiver, subject, body;
-    if (!recv_line(clientfd, sender) || !recv_line(clientfd, receiver) || !recv_line(clientfd, subject)) {
+void TWMailerServer::handleSendAuthenticated(int clientfd, const std::string& sender) {
+    std::string receiver, subject, body;
+    if (!recv_line(clientfd, receiver) || !recv_line(clientfd, subject)) {
         send_all(clientfd, "ERR\n");
         return;
     }
-    sender = trim_newline(sender);
     receiver = trim_newline(receiver);
     subject = trim_newline(subject);
 
-    if (!valid_username(sender) || !valid_username(receiver) || !valid_subject(subject)) {
+    if (!valid_username(receiver) || !valid_subject(subject)) {
         send_all(clientfd, "ERR\n");
         return;
     }
@@ -183,136 +212,104 @@ void TWMailerServer::handleSend(int clientfd) {
     }
 
     Message msg{ "", sender, receiver, subject, body };
-    string err;
-    if (!store.store_message(msg, err)) {
-        cerr << "Store error: " << err << endl;
-        send_all(clientfd, "ERR\n");
-        return;
+    std::string err;
+    {
+        std::lock_guard<std::mutex> lg(store_mutex);
+        if (!store.store_message(msg, err)) {
+            std::cerr << "Store error: " << err << std::endl;
+            send_all(clientfd, "ERR\n");
+            return;
+        }
     }
 
     send_all(clientfd, "OK\n");
 }
 
-void TWMailerServer::handleList(int clientfd) {
-    string user;
-    if (!recv_line(clientfd, user)) {
-        send_all(clientfd, "ERR\n");
-        return;
+void TWMailerServer::handleListAuthenticated(int clientfd, const std::string& username) {
+    std::vector<std::string> subjects;
+    {
+        std::lock_guard<std::mutex> lg(store_mutex);
+        if (!store.list_subjects(username, subjects)) {
+            send_all(clientfd, "0\n");
+            return;
+        }
     }
-    user = trim_newline(user);
-
-    if (!valid_username(user)) {
-        send_all(clientfd, "0\n");
-        return;
-    }
-
-    vector<string> subjects;
-    if (!store.list_subjects(user, subjects)) {
-        send_all(clientfd, "0\n");
-        return;
-    }
-
-    ostringstream oss;
-    oss << subjects.size() << endl;
-    for (auto& s : subjects) oss << s << endl;
+    std::ostringstream oss;
+    oss << subjects.size() << "\n";
+    for (auto& s : subjects) oss << s << "\n";
     send_all(clientfd, oss.str());
 }
 
-void TWMailerServer::handleRead(int clientfd) {
-    string user, numStr;
-    if (!recv_line(clientfd, user) || !recv_line(clientfd, numStr)) {
+void TWMailerServer::handleReadAuthenticated(int clientfd, const std::string& username) {
+    std::string numStr;
+    if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
         return;
     }
-
-    user = trim_newline(user);
     numStr = trim_newline(numStr);
-    if (!valid_username(user)) {
-        send_all(clientfd, "ERR\n");
-        return;
-    }
-
     size_t num = 0;
     try {
-        num = stoul(numStr);
+        num = std::stoul(numStr);
     } catch (...) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
-    auto msgOpt = store.read_message(user, num);
+    std::optional<Message> msgOpt;
+    {
+        std::lock_guard<std::mutex> lg(store_mutex);
+        msgOpt = store.read_message(username, num);
+    }
     if (!msgOpt) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
     auto& msg = *msgOpt;
-    ostringstream oss;
-    oss << "OK" << endl
-        << msg.sender << endl
-        << msg.receiver << endl
-        << msg.subject << endl;
-
+    std::ostringstream oss;
+    oss << "OK\n";
+    oss << msg.sender << "\n";
+    oss << msg.receiver << "\n";
+    oss << msg.subject << "\n";
     if (!msg.body.empty()) {
         oss << msg.body;
-        if (msg.body.back() != '\n') {
-            oss << endl;
-        }
+        if (msg.body.back() != '\n') oss << "\n";
     }
-    oss << "." << endl;
-
+    oss << ".\n";
     send_all(clientfd, oss.str());
 }
 
-void TWMailerServer::handleDel(int clientfd) {
-    string user, numStr;
-    if (!recv_line(clientfd, user) || !recv_line(clientfd, numStr)) {
+void TWMailerServer::handleDelAuthenticated(int clientfd, const std::string& username) {
+    std::string numStr;
+    if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
         return;
     }
-
-    user = trim_newline(user);
     numStr = trim_newline(numStr);
-    if (!valid_username(user)) {
-        send_all(clientfd, "ERR\n");
-        return;
-    }
-
     size_t num = 0;
     try {
-        num = stoul(numStr);
+        num = std::stoul(numStr);
     } catch (...) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
-    string err;
-    if (!store.delete_message(user, num, err)) {
-        send_all(clientfd, "ERR\n");
-        return;
+    std::string err;
+    {
+        std::lock_guard<std::mutex> lg(store_mutex);
+        if (!store.delete_message(username, num, err)) {
+            send_all(clientfd, "ERR\n");
+            return;
+        }
     }
-
     send_all(clientfd, "OK\n");
 }
 
-// -----------------------------
-// SIGNAL HANDLER
-// -----------------------------
 void TWMailerServer::signalHandler(int sig) {
     if (sig == SIGINT) {
-        cout << "\nAbort requested..." << endl;
+        std::cout << "\nAbort requested..." << std::endl;
         abortRequested = 1;
-
-        if (new_socket != -1) {
-            shutdown(new_socket, SHUT_RDWR);
-            close(new_socket);
-            new_socket = -1;
-        }
-        if (create_socket != -1) {
-            shutdown(create_socket, SHUT_RDWR);
-            close(create_socket);
-            create_socket = -1;
-        }
+        // closing of sockets is handled in destructor / run loop
     } else {
         exit(sig);
     }

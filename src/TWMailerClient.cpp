@@ -1,258 +1,200 @@
 #include "TWMailerClient.hpp"
+#include "Utils.hpp"
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <iostream>
+#include <sstream>
+#include <cstring>
 
-TWMailerClient::TWMailerClient(const string& server_ip, int port) : port(port) {
-    createSocket();
-    initAddress(server_ip);
-    connectToServer();
+using std::string;
+using std::cout;
+using std::cerr;
+using std::endl;
+
+TWMailerClient::TWMailerClient(const string& server_ip_, int port_)
+    : server_ip(server_ip_), port(port_), socket_fd(-1) {
 }
 
 TWMailerClient::~TWMailerClient() {
-    closeConnection();
-}
-
-void TWMailerClient::createSocket() {
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd == -1) {
-        throw runtime_error("Socket creation failed");
-    }
-}
-
-void TWMailerClient::initAddress(const string& server_ip) {
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(port);
-
-    if (inet_aton(server_ip.c_str(), &server_address.sin_addr) == 0) {
-        throw invalid_argument("Invalid IP address");
-    }
-}
-
-void TWMailerClient::connectToServer() {
-    if (connect(socket_fd, reinterpret_cast<sockaddr*>(&server_address), sizeof(server_address)) == -1) {
-        throw runtime_error("Connection failed: no server available");
-    }
-    cout << "Connection with server (" << inet_ntoa(server_address.sin_addr) << ") established" << endl;
-}
-
-bool TWMailerClient::receiveMessage() {
-    char buffer[BUF];
-    ssize_t size = recv(socket_fd, buffer, BUF - 1, 0);
-
-    if (size == -1) {
-        perror("recv error");
-        return false;
-    } else if (size == 0) {
-        cout << "Server closed remote socket" << endl;
-        return false;
-    } else {
-        buffer[size] = '\0';
-        cout << "<< " << buffer << endl;
-        if (strcmp(buffer, "OK") != 0 && strcmp(buffer, "quit") != 0) {
-            cerr << "<< Server error occurred, abort" << endl;
-            return false;
-        }
-    }
-    return true;
-}
-
-void TWMailerClient::sendMessage(const string& message) {
-    if (send(socket_fd, message.c_str(), message.size() + 1, 0) == -1) {
-        perror("send error");
-        throw runtime_error("Failed to send message");
-    }
-}
-
-void TWMailerClient::closeConnection() noexcept {
     if (socket_fd != -1) {
-        if (shutdown(socket_fd, SHUT_RDWR) == -1) {
-            perror("shutdown socket_fd");
-        }
-        if (close(socket_fd) == -1) {
-            perror("close socket_fd");
-        }
+        shutdown(socket_fd, SHUT_RDWR);
+        close(socket_fd);
         socket_fd = -1;
     }
 }
 
+bool TWMailerClient::createSocket() {
+    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd == -1) {
+        perror("socket");
+        return false;
+    }
+    return true;
+}
+
+bool TWMailerClient::connectToServer() {
+    if (!createSocket()) return false;
+    sockaddr_in addr{};
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, server_ip.c_str(), &addr.sin_addr) != 1) {
+        cerr << "Invalid IP address" << endl;
+        return false;
+    }
+    if (connect(socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
+        perror("connect");
+        return false;
+    }
+    return true;
+}
+
+bool TWMailerClient::recv_line_std(std::string& out) {
+    return recv_line(socket_fd, out);
+}
+
+bool TWMailerClient::recv_line_and_print() {
+    std::string line;
+    if (!recv_line_std(line)) return false;
+    cout << line;
+    return true;
+}
+
+void TWMailerClient::send_raw(const std::string& s) {
+    if (send_all(socket_fd, s) < 0) {
+        throw std::runtime_error("send failed");
+    }
+}
+
 void TWMailerClient::run() {
+    if (!connectToServer()) {
+        cerr << "Connection failed" << endl;
+        return;
+    }
+
+    cout << "Connected. You must LOGIN first." << endl;
     string cmd;
-    cout << "Connected. Type commands (SEND, LIST, READ, DEL, QUIT)." << endl;
+    bool logged_in = false;
+    string session_user;
+
+    // optionally read greeting
+    std::string greeting;
+    if (recv_line_std(greeting)) {
+        cout << "<< " << trim_newline(greeting) << endl;
+    }
+
     while (true) {
         cout << "> ";
-        if (!getline(cin, cmd)) {
-            break;
-        }
+        if (!std::getline(std::cin, cmd)) break;
+        if (cmd.empty()) continue;
 
-        if (cmd.empty()) {
-            continue;
-        }
-        string ucmd = cmd;
-        // uppercase the command word for recognition
-        {
-            istringstream is(ucmd);
-            string w; is >> w;
-            for (auto &c : w) c = toupper((unsigned char)c);
+        std::istringstream iss(cmd);
+        string w; iss >> w;
+        for (auto &c : w) c = std::toupper((unsigned char)c);
+
+        if (w == "LOGIN") {
+            string user, pass;
+            cout << "Username: "; if (!std::getline(std::cin, user)) break;
+            cout << "Password: "; if (!std::getline(std::cin, pass)) break;
+            std::ostringstream out;
+            out << "LOGIN\n" << user << "\n" << pass << "\n";
+            try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+
+            string resp;
+            if (!recv_line_std(resp)) { cerr << "Server disconnected\n"; break; }
+            resp = trim_newline(resp);
+            if (resp == "OK") {
+                logged_in = true;
+                session_user = user;
+                cout << "Login OK." << endl;
+            } else {
+                cout << "Login failed." << endl;
+            }
+        } else if (w == "QUIT") {
+            try {
+                send_raw(string("QUIT\n"));
+            } catch(...) {}
+            cout << "Disconnected" << endl;
+            break;
+        } else {
+            if (!logged_in) {
+                cout << "You must LOGIN first." << endl;
+                continue;
+            }
+
             if (w == "SEND") {
-                // gather SEND fields
-                string sender, receiver, subject;
-                cout << "Sender: "; getline(cin, sender);
-                cout << "Receiver: "; getline(cin, receiver);
-                cout << "Subject: "; getline(cin, subject);
-                if (!valid_username(sender) || !valid_username(receiver) || !valid_subject(subject)) {
-                    cout << "Invalid sender/receiver/subject" << endl;
+                string receiver, subject;
+                cout << "Receiver: "; getline(std::cin, receiver);
+                cout << "Subject: "; getline(std::cin, subject);
+                if (!valid_username(receiver) || !valid_subject(subject)) {
+                    cout << "Invalid receiver/subject" << endl;
                     continue;
                 }
-                // send header
-                ostringstream out;
-                out << "SEND" << endl;
-                out << sender << endl;
-                out << receiver << endl;
-                out << subject << endl;
-                if (send_all(socket_fd, out.str()) < 0) {
-                    cerr << "Send failed" << endl;
-                    break;
-                }
+                std::ostringstream out;
+                out << "SEND\n" << receiver << "\n" << subject << "\n";
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+
                 cout << "Enter message body. End with single dot on a line:" << endl;
                 while (true) {
                     string line;
-                    if (!getline(cin, line)) {
-                        break;
-                    }
-
+                    if (!getline(std::cin, line)) break;
+                    if (line == ".") break;
                     string sendline = line + "\n";
-                    if (line == ".") {
-                        // protocol requires just ".\n" to end— but we've already sent it; done.
-                        break;
-                    }
+                    if (send_all(socket_fd, sendline) < 0) { cerr << "Send failed\n"; break; }
+                }
+                if (send_all(socket_fd, ".\n") < 0) { cerr << "Send failed\n"; break; }
 
-                    if (send_all(socket_fd, sendline) < 0) {
-                        cerr << "Send failed" << endl;
-                        break;
-                    }
-                }
-                // finally send the dot terminator if not already sent
-                if (send_all(socket_fd, ".\n") < 0) {
-                    cerr << "Send failed" << endl;
-                    break;
-                }
-                // read response line
                 string resp;
-                if (!recv_line(socket_fd, resp)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
-                cout << "Server: " << resp << endl;
+                if (!recv_line_std(resp)) { cerr << "Server disconnected\n"; break; }
+                cout << "<< " << trim_newline(resp) << endl;
+
             } else if (w == "LIST") {
-                string user;
-                cout << "Username: "; getline(cin, user);
-                if (!valid_username(user)) {
-                    cout << "Invalid username" << endl;
-                    continue;
-                }
-                ostringstream out;
-                out << "LIST" << endl;
-                out << user  << endl;
-                if (send_all(socket_fd, out.str()) < 0) {
-                    cerr << "Send failed" << endl;
-                    break;
-                }
-                // read count line
+                try { send_raw(string("LIST\n")); } catch(...) { cerr << "Send failed\n"; break; }
                 string line;
-                if (!recv_line(socket_fd, line)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
-                cout << "Server: " << line  << endl;
+                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                line = trim_newline(line);
+                cout << "Server: " << line << endl;
                 int count = 0;
-                try {
-                    count = stoi(trim_newline(line));
-                } catch(...) {
-                    count = 0;
-                }
+                try { count = std::stoi(line); } catch(...) { count = 0; }
                 for (int i = 0; i < count; ++i) {
-                    if (!recv_line(socket_fd, line)) {
-                        cout << "Server disconnected" << endl;
-                        break;
-                    }
-                    cout << (i+1) << ": " << line  << endl;
+                    if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                    cout << (i+1) << ": " << trim_newline(line) << endl;
                 }
             } else if (w == "READ") {
-                string user; string num;
-                cout << "Username: "; getline(cin, user);
-                cout << "Message-Number: "; getline(cin, num);
-                if (!valid_username(user)) {
-                    cout << "Invalid username" << endl;
-                    continue;
-                }
-                ostringstream out;
-                out << "READ" << endl << user << endl << num << endl;
-                if (send_all(socket_fd, out.str()) < 0) {
-                    cerr << "Send failed" << endl;
-                    break;
-                }
+                cout << "Message-Number: ";
+                string num; getline(std::cin, num);
+                std::ostringstream out;
+                out << "READ\n" << num << "\n";
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
                 string line;
-                if (!recv_line(socket_fd, line)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
+                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
                 if (trim_newline(line) != "OK") {
                     cout << "Server: ERR" << endl;
                     continue;
                 }
-                // Next lines are message per SEND format until ".\n"
-                string sender, receiver, subject, body;
-                if (!recv_line(socket_fd, sender)) {
-                    cout << "Server disconnected" << endl;
-                    break;
+                // read message header/body
+                string sender, receiver, subject;
+                if (!recv_line_std(sender) || !recv_line_std(receiver) || !recv_line_std(subject)) {
+                    cerr << "Server disconnected\n"; break;
                 }
-                if (!recv_line(socket_fd, receiver)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
-                if (!recv_line(socket_fd, subject)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
-                cout << "Sender: " << sender << endl;
-                cout << "Receiver: " << receiver << endl;
-                cout << "Subject: " << subject << endl;
+                cout << "Sender: " << trim_newline(sender) << endl;
+                cout << "Receiver: " << trim_newline(receiver) << endl;
+                cout << "Subject: " << trim_newline(subject) << endl;
                 cout << "Body:" << endl;
                 while (true) {
-                    if (!recv_line(socket_fd, line)) {
-                        cout << "Server disconnected" << endl;
-                        break;
-                    }
-                    if (line == ".") {
-                        break;
-                    }
-                    cout << line << endl;
+                    if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                    if (trim_newline(line) == ".") break;
+                    cout << line;
                 }
             } else if (w == "DEL") {
-                string user; string num;
-                cout << "Username: "; getline(cin, user);
-                cout << "Message-Number: "; getline(cin, num);
-                if (!valid_username(user)) {
-                    cout << "Invalid username" << endl;
-                    continue;
-                }
-                ostringstream out;
-                out << "DEL" << endl << user << endl << num << endl;
-                if (send_all(socket_fd, out.str()) < 0) {
-                    cerr << "Send failed" << endl;
-                    break;
-                }
+                cout << "Message-Number: ";
+                string num; getline(std::cin, num);
+                std::ostringstream out;
+                out << "DEL\n" << num << "\n";
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
                 string line;
-                if (!recv_line(socket_fd, line)) {
-                    cout << "Server disconnected" << endl;
-                    break;
-                }
-                cout << "Server: " << line << endl;
-            } else if (w == "QUIT") {
-                ostringstream out;
-                out << "QUIT" << endl;
-                send_all(socket_fd, out.str());
-                cout << "Disconnected" << endl;
-                break;
+                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                cout << "<< " << trim_newline(line) << endl;
             } else {
                 cout << "Unknown command" << endl;
             }

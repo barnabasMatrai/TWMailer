@@ -4,14 +4,16 @@
 #include <string>
 #include <sys/socket.h>
 
-using std::string;
-using std::islower;
-using std::isdigit;
+static constexpr int BUF_SIZE = 4096;
 
-ssize_t send_all(int sockfd, const string &data);
-bool recv_line(int sockfd, string &line); // reads until '\n', strips '\r' and '\n'
-string trim_newline(const string &s);
-bool valid_username(const string &u);
-bool valid_subject(const string &s);
+std::string trim_newline(const std::string& s);
+bool valid_username(const std::string& u);
+bool valid_subject(const std::string& s);
+
+// send_all: send whole buffer (returns 0 on success, -1 on error)
+int send_all(int sockfd, const std::string& data);
+
+// recv_line: read one line (terminated by '\n'), return false on error/closed
+bool recv_line(int sockfd, std::string& out);
 
 #endif // UTILS_HPP

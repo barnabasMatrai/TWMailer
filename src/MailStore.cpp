@@ -1,120 +1,106 @@
 #include "MailStore.hpp"
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <chrono>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
-MailStore::MailStore(const string &spool_dir) : spool(spool_dir) {}
+MailStore::MailStore(const std::string& spoolDir) : spoolDir(spoolDir) {}
 
-bool MailStore::ensure_spool_ok(string &err) {
+MailStore::~MailStore() {}
+
+bool MailStore::ensure_spool_ok(std::string& err) {
     try {
-        if (!fs::exists(spool)) {
-            fs::create_directories(spool);
-        }
-        if (!fs::is_directory(spool)) {
-            err = "Spool path exists and is not a directory";
+        if (!fs::exists(spoolDir)) {
+            fs::create_directories(spoolDir);
+        } else if (!fs::is_directory(spoolDir)) {
+            err = "spool path exists but is not a directory";
             return false;
         }
-    } catch (const fs::filesystem_error &e) {
+    } catch (const fs::filesystem_error& e) {
         err = e.what();
         return false;
     }
     return true;
 }
 
-string MailStore::user_inbox_path(const string &user) const {
-    return spool + "/" + user + "/inbox";
+std::string MailStore::user_dir(const std::string& user) const {
+    return spoolDir + "/" + user;
 }
 
-bool MailStore::ensure_user_inbox(const string &user, string &err) {
-    try {
-        fs::path p(user_inbox_path(user));
-        if (!fs::exists(p)) {
-            fs::create_directories(p);
-        }
-        if (!fs::is_directory(p)) {
-            err = "User inbox path exists and is not a directory";
-            return false;
-        }
-    } catch (const fs::filesystem_error &e) {
-        err = e.what();
-        return false;
-    }
-    return true;
-}
-
-static string make_unique_filename() {
+static std::string make_timestamp_filename() {
     using namespace std::chrono;
     auto now = system_clock::now();
-    auto t = system_clock::to_time_t(now);
-    auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count() % 1000;
-    ostringstream ss;
-    ss << t << "_" << setw(3) << setfill('0') << ms;
+    auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count();
+    std::ostringstream ss;
+    ss << ms;
     return ss.str();
 }
 
-bool MailStore::store_message(const Message &msg, string &err) {
-    if (!ensure_user_inbox(msg.receiver, err)) {
-        return false;
-    }
-    fs::path inbox(user_inbox_path(msg.receiver));
-    string fname = make_unique_filename();
-    fs::path file = inbox / (fname + ".msg");
+bool MailStore::store_message(const Message& msg, std::string& err) {
     try {
-        ofstream ofs(file, ios::out | ios::binary);
-        if (!ofs) {
-            err = "Failed to open file for writing";
+        std::string udir = user_dir(msg.receiver);
+        if (!fs::exists(udir)) fs::create_directories(udir);
+        std::string fname = make_timestamp_filename() + ".msg";
+        std::string full = udir + "/" + fname;
+        std::ofstream ofs(full, std::ofstream::trunc | std::ofstream::binary);
+        if (!ofs.is_open()) {
+            err = "failed to open message file for writing";
             return false;
         }
-        // simple storage format: lines with headers then body and final newline
+        // simple format:
+        // Sender: <sender>\n
+        // Receiver: <receiver>\n
+        // Subject: <subject>\n
+        // Body:\n
+        // <body>
         ofs << "Sender: " << msg.sender << "\n";
         ofs << "Receiver: " << msg.receiver << "\n";
         ofs << "Subject: " << msg.subject << "\n";
-        ofs << "\n";
+        ofs << "Body:\n";
         ofs << msg.body;
-        if (!msg.body.empty() && msg.body.back() != '\n') {
-            ofs << "\n";
-        }
         ofs.close();
-    } catch (const exception &e) {
+    } catch (const std::exception& e) {
         err = e.what();
         return false;
     }
     return true;
 }
 
-bool MailStore::list_subjects(const string &user, vector<string> &subjects) {
-    subjects.clear();
-    fs::path inbox(user_inbox_path(user));
-    if (!fs::exists(inbox) || !fs::is_directory(inbox)) {
-        return false;
+std::vector<std::string> MailStore::list_user_files(const std::string& user) const {
+    std::vector<std::string> files;
+    std::string udir = user_dir(user);
+    if (!fs::exists(udir) || !fs::is_directory(udir)) return files;
+    for (auto& de : fs::directory_iterator(udir)) {
+        if (!de.is_regular_file()) continue;
+        files.push_back(de.path().filename().string());
     }
+    // sort by filename (timestamps) ascending
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+bool MailStore::list_subjects(const std::string& user, std::vector<std::string>& subjects) {
+    subjects.clear();
     try {
-        // gather filenames and sort
-        vector<fs::directory_entry> entries;
-        for (auto &ent : fs::directory_iterator(inbox)) {
-            if (ent.is_regular_file()) {
-                entries.push_back(ent);
-            }
-        }
-        sort(entries.begin(), entries.end(), [](const fs::directory_entry &a, const fs::directory_entry &b){
-            return a.path().filename().string() < b.path().filename().string();
-        });
-        for (auto &ent : entries) {
-            ifstream ifs(ent.path());
-            if (!ifs) {
-                continue;
-            }
-            string line;
-            string subject = "";
-            while (getline(ifs, line)) {
-                if (line.rfind("Subject:", 0) == 0) {
-                    subject = line.substr(string("Subject:").size());
-                    // trim leading spaces
-                    if (!subject.empty() && subject[0] == ' ') {
-                        subject.erase(0,1);
-                    }
+        auto files = list_user_files(user);
+        for (auto& f : files) {
+            std::string path = user_dir(user) + "/" + f;
+            std::ifstream ifs(path, std::ios::binary);
+            if (!ifs.is_open()) continue;
+            std::string line;
+            // read until Subject: <subject>\n
+            std::string subject;
+            while (std::getline(ifs, line)) {
+                if (line.rfind("Subject: ", 0) == 0) {
+                    subject = line.substr(9);
                     break;
                 }
             }
+            if (subject.empty()) subject = "(no subject)";
             subjects.push_back(subject);
         }
     } catch (...) {
@@ -123,93 +109,50 @@ bool MailStore::list_subjects(const string &user, vector<string> &subjects) {
     return true;
 }
 
-optional<Message> MailStore::read_message(const string &user, size_t index) {
-    fs::path inbox(user_inbox_path(user));
-    if (!fs::exists(inbox) || !fs::is_directory(inbox)) {
-        return nullopt;
+std::optional<Message> MailStore::read_message(const std::string& user, size_t idx) {
+    auto files = list_user_files(user);
+    if (idx == 0 || idx > files.size()) return std::nullopt;
+    std::string path = user_dir(user) + "/" + files[idx - 1];
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) return std::nullopt;
+    Message m;
+    m.filename = files[idx - 1];
+    std::string line;
+    // read header lines
+    while (std::getline(ifs, line)) {
+        if (line.rfind("Sender: ", 0) == 0) {
+            m.sender = line.substr(8);
+        } else if (line.rfind("Receiver: ", 0) == 0) {
+            m.receiver = line.substr(10);
+        } else if (line.rfind("Subject: ", 0) == 0) {
+            m.subject = line.substr(9);
+        } else if (line == "Body:") {
+            // read rest as body
+            std::ostringstream body;
+            std::string l;
+            while (std::getline(ifs, l)) {
+                body << l;
+                if (!ifs.eof()) body << "\n";
+            }
+            m.body = body.str();
+            break;
+        }
     }
-    try {
-        vector<fs::directory_entry> entries;
-        for (auto &ent : fs::directory_iterator(inbox)) {
-            if (ent.is_regular_file()) entries.push_back(ent);
-        }
-        sort(entries.begin(), entries.end(), [](const fs::directory_entry &a, const fs::directory_entry &b){
-            return a.path().filename().string() < b.path().filename().string();
-        });
-        if (index == 0 || index > entries.size()) {
-            return nullopt;
-        }
-        fs::path file = entries[index-1].path();
-        ifstream ifs(file);
-        if (!ifs) {
-            return nullopt;
-        }
-        Message msg;
-        msg.filename = file.filename().string();
-        string line;
-        // read headers
-        while (getline(ifs, line)) {
-            if (line.empty()) break;
-            if (line.rfind("Sender:", 0) == 0) {
-                msg.sender = line.substr(string("Sender:").size());
-            }
-            if (line.rfind("Sender:", 0) == 0 && !msg.sender.empty() && msg.sender[0]==' ') {
-                msg.sender.erase(0,1);
-            }
-            if (line.rfind("Receiver:", 0) == 0) {
-                msg.receiver = line.substr(string("Receiver:").size());
-            }
-            if (line.rfind("Receiver:", 0) == 0 && !msg.receiver.empty() && msg.receiver[0]==' ') {
-                msg.receiver.erase(0,1);
-            }
-            if (line.rfind("Subject:", 0) == 0) {
-                msg.subject = line.substr(string("Subject:").size());
-            }
-            if (line.rfind("Subject:", 0) == 0 && !msg.subject.empty() && msg.subject[0]==' ') {
-                msg.subject.erase(0,1);
-            }
-        }
-        // rest is body
-        ostringstream body;
-        bool first = true;
-        while (getline(ifs, line)) {
-            if (!first) {
-                body << "\n";
-            }
-            body << line;
-            first = false;
-        }
-        msg.body = body.str();
-        return msg;
-    } catch (...) {
-        return nullopt;
-    }
+    return m;
 }
 
-bool MailStore::delete_message(const string &user, size_t index, string &err) {
-    fs::path inbox(user_inbox_path(user));
-    if (!fs::exists(inbox) || !fs::is_directory(inbox)) {
-        err = "User not found";
+bool MailStore::delete_message(const std::string& user, size_t idx, std::string& err) {
+    auto files = list_user_files(user);
+    if (idx == 0 || idx > files.size()) {
+        err = "invalid message number";
         return false;
     }
+    std::string path = user_dir(user) + "/" + files[idx - 1];
     try {
-        vector<fs::directory_entry> entries;
-        for (auto &ent : fs::directory_iterator(inbox)) {
-            if (ent.is_regular_file()) {
-                entries.push_back(ent);
-            }
-        }
-        sort(entries.begin(), entries.end(), [](const fs::directory_entry &a, const fs::directory_entry &b){
-            return a.path().filename().string() < b.path().filename().string();
-        });
-        if (index == 0 || index > entries.size()) {
-            err = "Message number out of range";
-            return false;
-        }
-        fs::remove(entries[index-1].path());
-        return true;
-    } catch (const fs::filesystem_error &e) {
+        fs::remove(path);
+    } catch (const std::exception& e) {
         err = e.what();
         return false;
     }
+    return true;
 }

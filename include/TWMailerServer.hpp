@@ -1,68 +1,49 @@
 #ifndef TWMAILERSERVER_HPP
 #define TWMAILERSERVER_HPP
 
-#include "MailStore.hpp"
-#include "Utils.hpp"
-
-#include <iostream>
-#include <string>
-#include <cstring>
 #include <csignal>
-#include <cstdlib>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #include <sstream>
-#include <vector>
-
-using std::cout;
-using std::cerr;
-using std::endl;
-
-using std::string;
-using std::stoul;
-using std::vector;
-
-using std::memset;
-using std::ostringstream;
+#include <string>
+#include <atomic>
+#include <mutex>
+#include "MailStore.hpp"
+#include "AuthManager.hpp"
 
 class TWMailerServer {
 public:
-    // Constructor & destructor
-    TWMailerServer(int port, const string& spoolDir);
+    TWMailerServer(int port, const std::string& spoolDir);
     ~TWMailerServer();
 
-    // Run main accept loop
-    int run();
+    int run(); // blocks until shutdown
 
-    // Signal handler for graceful shutdown
-    static void signalHandler(int sig);
+    static volatile sig_atomic_t abortRequested;
 
 private:
-    // Class-level shared sockets (for signal handling)
-    static volatile sig_atomic_t abortRequested;
-    static int create_socket;
-    static int new_socket;
-
-    // Instance data
     int port;
-    string mailSpoolDir;
+    std::string mailSpoolDir;
     MailStore store;
+    AuthManager authManager;
 
-    // Setup helpers
+    std::mutex store_mutex; // protect store operations
+
+    int create_socket;
+
     void setupSignalHandler();
     void createSocket();
     void setSocketOptions();
     void bindSocket();
     void listenSocket();
 
-    // Client communication and protocol handling
-    void* clientCommunication(void* data);
-    bool readDotTerminatedBody(int sockfd, string& body);
-    void handleSend(int clientfd);
-    void handleList(int clientfd);
-    void handleRead(int clientfd);
-    void handleDel(int clientfd);
+    void clientThread(int clientfd, std::string client_ip);
+
+    // command handlers (authenticated)
+    bool readDotTerminatedBody(int sockfd, std::string& body);
+    void handleSendAuthenticated(int clientfd, const std::string& sender);
+    void handleListAuthenticated(int clientfd, const std::string& username);
+    void handleReadAuthenticated(int clientfd, const std::string& username);
+    void handleDelAuthenticated(int clientfd, const std::string& username);
+
+    static void signalHandler(int sig);
 };
 
-#endif
+#endif // TWMAILERSERVER_HPP

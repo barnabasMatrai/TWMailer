@@ -1,97 +1,70 @@
 #include "Utils.hpp"
-#include <unistd.h>
-#include <cerrno>
-#include <cstring>
+#include <algorithm>
 #include <cctype>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <iostream>
 
-ssize_t send_all(int socketFd, const string& data) {
-    size_t totalSent = 0;
-    const char* bufferPtr = data.data();
-    size_t bytesRemaining = data.size();
+std::string trim_newline(const std::string& s) {
+    std::string out = s;
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    return out;
+}
 
-    while (bytesRemaining > 0) {
-        ssize_t bytesSent = send(socketFd, bufferPtr + totalSent, bytesRemaining, 0);
+bool valid_username(const std::string& u) {
+    if (u.empty() || u.size() > 64) return false;
+    for (char c : u) {
+        if (!(std::isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.')) return false;
+    }
+    return true;
+}
 
-        if (bytesSent <= 0) {
-            if (bytesSent < 0 && errno == EINTR) {
-                // Interrupted by signal, retry
-                continue;
-            }
-            // Any other error or peer closed connection
+bool valid_subject(const std::string& s) {
+    // allow reasonably sized subjects only
+    if (s.size() > 256) return false;
+    return true;
+}
+
+int send_all(int sockfd, const std::string& data) {
+    const char* ptr = data.c_str();
+    size_t left = data.size();
+    while (left > 0) {
+        ssize_t n = send(sockfd, ptr, left, 0);
+        if (n <= 0) {
+            if (n == -1 && errno == EINTR) continue;
+            perror("send");
             return -1;
         }
-
-        totalSent += static_cast<size_t>(bytesSent);
-        bytesRemaining -= static_cast<size_t>(bytesSent);
+        ptr += n;
+        left -= n;
     }
-
-    return static_cast<ssize_t>(totalSent);
+    return 0;
 }
 
-
-bool recv_line(int socketFd, string& line) {
-    line.clear();
-    char currentChar = 0;
-
+bool recv_line(int sockfd, std::string& out) {
+    out.clear();
+    char buf;
+    bool got_any = false;
     while (true) {
-        ssize_t bytesReceived = recv(socketFd, &currentChar, 1, 0);
-
-        if (bytesReceived == 0) {
-            // Connection closed
+        ssize_t n = recv(sockfd, &buf, 1, 0);
+        if (n == -1) {
+            if (errno == EINTR) continue;
+            perror("recv");
             return false;
-        }
-
-        if (bytesReceived < 0) {
-            if (errno == EINTR) {
-                // Interrupted system call; retry
-                continue;
+        } else if (n == 0) {
+            // remote closed
+            return false;
+        } else {
+            got_any = true;
+            out.push_back(buf);
+            if (buf == '\n') break;
+            // protect from very long lines
+            if (out.size() > 16 * 1024) {
+                // too long
+                return false;
             }
-            // Other error
-            return false;
-        }
-
-        if (currentChar == '\n') {
-            // End of line reached
-            break;
-        }
-
-        line.push_back(currentChar);
-    }
-
-    // Remove trailing carriage return (for CRLF line endings)
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-    }
-
-    return true;
-}
-
-
-string trim_newline(const string &input) {
-    string trimmed = input;
-    
-    while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
-        trimmed.pop_back();
-    }
-
-    return trimmed;
-}
-
-bool valid_username(const string &username) {
-    if (username.empty() || username.size() > 8) {
-        return false;
-    }
-
-    for (char character : username) {
-        unsigned char unsignedChar = (unsigned char)character;
-        if (!(islower(unsignedChar) || isdigit(unsignedChar))) {
-            return false;
         }
     }
-    return true;
-}
-
-bool valid_subject(const string &subject) {
-    // max 80 chars
-    return subject.size() <= 80;
+    return got_any;
 }

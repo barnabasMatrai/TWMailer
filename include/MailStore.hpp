@@ -4,50 +4,38 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <filesystem>
-#include <fstream>
-#include <chrono>
-#include <sstream>
-#include <iomanip>
-#include <algorithm>
-
-using std::string;
-using std::vector;
-using std::optional;
-using std::nullopt;
-using std::ostringstream;
-using std::setw;
-using std::setfill;
-using std::ios;
-using std::ofstream;
-using std::ifstream;
-using std::exception;
 
 struct Message {
-    string filename; // internal filename
-    string sender;
-    string receiver;
-    string subject;
-    string body; // full body (can include newlines)
+    std::string filename; // internal filename
+    std::string sender;
+    std::string receiver;
+    std::string subject;
+    std::string body;
 };
 
 class MailStore {
 public:
-    MailStore(const string &spool_dir);
-    bool ensure_spool_ok(string &err);
-    // Store a message for receiver; returns true on success
-    bool store_message(const Message &msg, string &err);
-    // List subjects for a user (ordered by filename ascending)
-    bool list_subjects(const string &user, vector<string> &subjects);
-    // Read the Nth message (1-based). Returns nullopt on error.
-    optional<Message> read_message(const string &user, size_t index);
-    // Delete the Nth message (1-based). Returns true on success.
-    bool delete_message(const string &user, size_t index, string &err);
+    MailStore(const std::string& spoolDir);
+    ~MailStore();
+
+    bool ensure_spool_ok(std::string& err);
+
+    // store message; returns true on success
+    bool store_message(const Message& msg, std::string& err);
+
+    // list subjects for user (in chronological order)
+    bool list_subjects(const std::string& user, std::vector<std::string>& subjects);
+
+    // read nth message (1-based) for user
+    std::optional<Message> read_message(const std::string& user, size_t idx);
+
+    // delete nth message (1-based) for user
+    bool delete_message(const std::string& user, size_t idx, std::string& err);
 
 private:
-    string spool;
-    string user_inbox_path(const string &user) const;
-    bool ensure_user_inbox(const string &user, string &err);
+    std::string spoolDir;
+    std::string user_dir(const std::string& user) const;
+    std::vector<std::string> list_user_files(const std::string& user) const;
 };
 
 #endif // MAILSTORE_HPP
