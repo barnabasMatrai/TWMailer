@@ -95,7 +95,16 @@ void TWMailerClient::run() {
         if (w == "LOGIN") {
             string user, pass;
             cout << "Username: "; if (!std::getline(std::cin, user)) break;
+            termios oldt, newt;
+            tcgetattr(STDIN_FILENO, &oldt);
+            newt = oldt;
+            newt.c_lflag &= ~ECHO;
+            tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
             cout << "Password: "; if (!std::getline(std::cin, pass)) break;
+            cout << endl;
+
+            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
             std::ostringstream out;
             out << "LOGIN\n" << user << "\n" << pass << "\n";
             try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }

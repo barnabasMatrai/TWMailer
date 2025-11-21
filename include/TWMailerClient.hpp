@@ -2,6 +2,7 @@
 #define TWMAILERCLIENT_HPP
 
 #include <string>
+#include <termios.h>
 
 class TWMailerClient {
 public:

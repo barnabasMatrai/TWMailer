@@ -21,7 +21,7 @@ AuthManager::AuthManager(const string& ldap_uri,
       blacklist_file_(blacklist_file)
 {
     blacklist_ = new Blacklist(blacklist_file_);
-    blacklist_->load();
+    blacklist_ -> load();
 }
 
 AuthManager::~AuthManager() {
@@ -30,13 +30,13 @@ AuthManager::~AuthManager() {
 }
 
 bool AuthManager::is_ip_blacklisted(const std::string& ip) {
-    blacklist_->garbage_collect();
-    return blacklist_->is_blocked(ip);
+    blacklist_ -> garbage_collect();
+    return blacklist_ -> is_blocked(ip);
 }
 
 void AuthManager::persist_blacklist() {
-    blacklist_->garbage_collect();
-    blacklist_->save();
+    blacklist_ -> garbage_collect();
+    blacklist_ -> save();
 }
 
 void AuthManager::register_failed_attempt(const std::string& username, const std::string& ip) {
@@ -48,7 +48,7 @@ void AuthManager::register_failed_attempt(const std::string& username, const std
     if (pair.first >= 3) {
         auto until = clk::now() + chrono::minutes(1);
         pair.second = until;
-        blacklist_->add(ip, until);
+        blacklist_ -> add(ip, until);
         pair.first = 0;
         persist_blacklist();
     }
@@ -79,7 +79,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     int rc = ldap_initialize(&ld, ldapUri.c_str());
     if (rc != LDAP_SUCCESS) {
         std::cerr << "ldap_initialize failed: " << ldap_err2string(rc) << std::endl;
-        return EXIT_FAILURE;
+        return false;
     }
     std::cout << "connected to LDAP server " << ldapUri << std::endl;
 
@@ -87,7 +87,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     if (rc != LDAP_OPT_SUCCESS) {
         std::cerr << "ldap_set_option(PROTOCOL_VERSION): " << ldap_err2string(rc) << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
-        return EXIT_FAILURE;
+        return false;
     }
 
     // ----------------------------
@@ -97,7 +97,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     if (rc != LDAP_SUCCESS) {
         std::cerr << "ldap_start_tls_s(): " << ldap_err2string(rc) << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
-        return EXIT_FAILURE;
+        return false;
     }
 
     // ----------------------------
@@ -112,7 +112,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     if (rc != LDAP_SUCCESS) {
         std::cerr << "LDAP bind error: " << ldap_err2string(rc) << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
-        return EXIT_FAILURE;
+        return false;
     }
 
     return true;
@@ -126,9 +126,9 @@ bool AuthManager::authenticate(const std::string& username,
                                const std::string& client_ip,
                                std::string& err)
 {
-    blacklist_->garbage_collect();
+    blacklist_ -> garbage_collect();
 
-    if (blacklist_->is_blocked(client_ip)) {
+    if (blacklist_ -> is_blocked(client_ip)) {
         err = "IP blocked";
         return false;
     }
@@ -139,9 +139,9 @@ bool AuthManager::authenticate(const std::string& username,
         lock_guard<mutex> g(attempts_mtx_);
         auto it = attempts_.find(key);
         if (it != attempts_.end()) {
-            if (it->second.second > clk::now()) {
+            if (it -> second.second > clk::now()) {
                 err = "blocked due to repeated failed attempts";
-                blacklist_->add(client_ip, it->second.second);
+                blacklist_ -> add(client_ip, it -> second.second);
                 persist_blacklist();
                 return false;
             }

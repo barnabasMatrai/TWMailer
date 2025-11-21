@@ -52,7 +52,7 @@ void Blacklist::garbage_collect() {
     std::lock_guard<std::mutex> g(mtx_);
     auto now = clk::now();
     for (auto it = map_.begin(); it != map_.end(); ) {
-        if (it->second <= now) it = map_.erase(it);
+        if (it -> second <= now) it = map_.erase(it);
         else ++it;
     }
 }
@@ -61,7 +61,7 @@ bool Blacklist::is_blocked(const std::string& ip) {
     std::lock_guard<std::mutex> g(mtx_);
     auto it = map_.find(ip);
     if (it == map_.end()) return false;
-    if (it->second <= clk::now()) {
+    if (it -> second <= clk::now()) {
         map_.erase(it);
         return false;
     }

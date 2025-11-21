@@ -6,7 +6,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/twmailer-server",
-            "args": ["6543", "spool"],
+            "args": ["6543", "spooldir"],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "make",
             "MIMode": "gdb",
