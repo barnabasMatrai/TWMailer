@@ -8,11 +8,11 @@
 
 namespace fs = std::filesystem;
 
-MailStore::MailStore(const std::string& spoolDir) : spoolDir(spoolDir) {}
+MailStore::MailStore(const string& spoolDir) : spoolDir(spoolDir) {}
 
 MailStore::~MailStore() {}
 
-bool MailStore::ensure_spool_ok(std::string& err) {
+bool MailStore::ensure_spool_ok(string& err) {
     try {
         if (!fs::exists(spoolDir)) {
             fs::create_directories(spoolDir);
@@ -27,26 +27,26 @@ bool MailStore::ensure_spool_ok(std::string& err) {
     return true;
 }
 
-std::string MailStore::user_dir(const std::string& user) const {
+string MailStore::user_dir(const string& user) const {
     return spoolDir + "/" + user;
 }
 
-static std::string make_timestamp_filename() {
+static string make_timestamp_filename() {
     using namespace std::chrono;
     auto now = system_clock::now();
     auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count();
-    std::ostringstream ss;
+    ostringstream ss;
     ss << ms;
     return ss.str();
 }
 
-bool MailStore::store_message(const Message& msg, std::string& err) {
+bool MailStore::store_message(const Message& msg, string& err) {
     try {
-        std::string udir = user_dir(msg.receiver);
+        string udir = user_dir(msg.receiver);
         if (!fs::exists(udir)) fs::create_directories(udir);
-        std::string fname = make_timestamp_filename() + ".msg";
-        std::string full = udir + "/" + fname;
-        std::ofstream ofs(full, std::ofstream::trunc | std::ofstream::binary);
+        string fname = make_timestamp_filename() + ".msg";
+        string full = udir + "/" + fname;
+        ofstream ofs(full, ofstream::trunc | ofstream::binary);
         if (!ofs.is_open()) {
             err = "failed to open message file for writing";
             return false;
@@ -57,44 +57,44 @@ bool MailStore::store_message(const Message& msg, std::string& err) {
         // Subject: <subject>\n
         // Body:\n
         // <body>
-        ofs << "Sender: " << msg.sender << "\n";
-        ofs << "Receiver: " << msg.receiver << "\n";
-        ofs << "Subject: " << msg.subject << "\n";
+        ofs << "Sender: " << msg.sender << endl;
+        ofs << "Receiver: " << msg.receiver << endl;
+        ofs << "Subject: " << msg.subject << endl;
         ofs << "Body:\n";
         ofs << msg.body;
         ofs.close();
-    } catch (const std::exception& e) {
+    } catch (const exception& e) {
         err = e.what();
         return false;
     }
     return true;
 }
 
-std::vector<std::string> MailStore::list_user_files(const std::string& user) const {
-    std::vector<std::string> files;
-    std::string udir = user_dir(user);
+vector<string> MailStore::list_user_files(const string& user) const {
+    vector<string> files;
+    string udir = user_dir(user);
     if (!fs::exists(udir) || !fs::is_directory(udir)) return files;
     for (auto& de : fs::directory_iterator(udir)) {
         if (!de.is_regular_file()) continue;
         files.push_back(de.path().filename().string());
     }
     // sort by filename (timestamps) ascending
-    std::sort(files.begin(), files.end());
+    sort(files.begin(), files.end());
     return files;
 }
 
-bool MailStore::list_subjects(const std::string& user, std::vector<std::string>& subjects) {
+bool MailStore::list_subjects(const string& user, vector<string>& subjects) {
     subjects.clear();
     try {
         auto files = list_user_files(user);
         for (auto& f : files) {
-            std::string path = user_dir(user) + "/" + f;
-            std::ifstream ifs(path, std::ios::binary);
+            string path = user_dir(user) + "/" + f;
+            ifstream ifs(path, ios::binary);
             if (!ifs.is_open()) continue;
-            std::string line;
+            string line;
             // read until Subject: <subject>\n
-            std::string subject;
-            while (std::getline(ifs, line)) {
+            string subject;
+            while (getline(ifs, line)) {
                 if (line.rfind("Subject: ", 0) == 0) {
                     subject = line.substr(9);
                     break;
@@ -109,17 +109,17 @@ bool MailStore::list_subjects(const std::string& user, std::vector<std::string>&
     return true;
 }
 
-std::optional<Message> MailStore::read_message(const std::string& user, size_t idx) {
+optional<Message> MailStore::read_message(const string& user, size_t id) {
     auto files = list_user_files(user);
-    if (idx == 0 || idx > files.size()) return std::nullopt;
-    std::string path = user_dir(user) + "/" + files[idx - 1];
-    std::ifstream ifs(path, std::ios::binary);
-    if (!ifs.is_open()) return std::nullopt;
+    if (id == 0 || id > files.size()) return nullopt;
+    string path = user_dir(user) + "/" + files[id - 1];
+    ifstream ifs(path, ios::binary);
+    if (!ifs.is_open()) return nullopt;
     Message m;
-    m.filename = files[idx - 1];
-    std::string line;
+    m.filename = files[id - 1];
+    string line;
     // read header lines
-    while (std::getline(ifs, line)) {
+    while (getline(ifs, line)) {
         if (line.rfind("Sender: ", 0) == 0) {
             m.sender = line.substr(8);
         } else if (line.rfind("Receiver: ", 0) == 0) {
@@ -128,11 +128,11 @@ std::optional<Message> MailStore::read_message(const std::string& user, size_t i
             m.subject = line.substr(9);
         } else if (line == "Body:") {
             // read rest as body
-            std::ostringstream body;
-            std::string l;
-            while (std::getline(ifs, l)) {
+            ostringstream body;
+            string l;
+            while (getline(ifs, l)) {
                 body << l;
-                if (!ifs.eof()) body << "\n";
+                if (!ifs.eof()) body << endl;
             }
             m.body = body.str();
             break;
@@ -141,16 +141,16 @@ std::optional<Message> MailStore::read_message(const std::string& user, size_t i
     return m;
 }
 
-bool MailStore::delete_message(const std::string& user, size_t idx, std::string& err) {
+bool MailStore::delete_message(const string& user, size_t id, string& err) {
     auto files = list_user_files(user);
-    if (idx == 0 || idx > files.size()) {
+    if (id == 0 || id > files.size()) {
         err = "invalid message number";
         return false;
     }
-    std::string path = user_dir(user) + "/" + files[idx - 1];
+    string path = user_dir(user) + "/" + files[id - 1];
     try {
         fs::remove(path);
-    } catch (const std::exception& e) {
+    } catch (const exception& e) {
         err = e.what();
         return false;
     }

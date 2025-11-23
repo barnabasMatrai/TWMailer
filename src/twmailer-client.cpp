@@ -1,14 +1,18 @@
 #include "TWMailerClient.hpp"
 #include <iostream>
 
+using std::cerr;
+using std::endl;
+using std::stoi;
+
 int main(int argc, char* argv[]) {
     if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <ip> <port>" << std::endl;
+        cerr << "Usage: " << argv[0] << " <ip> <port>" << endl;
         return EXIT_FAILURE;
     }
 
-    std::string server_ip = argv[1];
-    int port = std::stoi(argv[2]);
+    string server_ip = argv[1];
+    int port = stoi(argv[2]);
 
     TWMailerClient client(server_ip, port);
     client.run();

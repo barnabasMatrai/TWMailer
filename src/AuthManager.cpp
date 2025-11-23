@@ -1,14 +1,6 @@
 #include "AuthManager.hpp"
 #include "Blacklist.hpp"
 
-#include <ldap.h>
-#include <iostream>
-#include <sstream>
-#include <chrono>
-
-using namespace std;
-using clk = chrono::system_clock;
-
 static string make_key(const string& u, const string& ip) {
     return u + "|" + ip;
 }
@@ -29,7 +21,7 @@ AuthManager::~AuthManager() {
     delete blacklist_;
 }
 
-bool AuthManager::is_ip_blacklisted(const std::string& ip) {
+bool AuthManager::is_ip_blacklisted(const string& ip) {
     blacklist_ -> garbage_collect();
     return blacklist_ -> is_blocked(ip);
 }
@@ -39,14 +31,14 @@ void AuthManager::persist_blacklist() {
     blacklist_ -> save();
 }
 
-void AuthManager::register_failed_attempt(const std::string& username, const std::string& ip) {
+void AuthManager::register_failed_attempt(const string& username, const string& ip) {
     string key = make_key(username, ip);
     lock_guard<mutex> g(attempts_mtx_);
     auto& pair = attempts_[key];
     pair.first += 1;
 
     if (pair.first >= 3) {
-        auto until = clk::now() + chrono::minutes(1);
+        auto until = clk::now() + minutes(1);
         pair.second = until;
         blacklist_ -> add(ip, until);
         pair.first = 0;
@@ -54,23 +46,23 @@ void AuthManager::register_failed_attempt(const std::string& username, const std
     }
 }
 
-void AuthManager::register_successful_login(const std::string& username, const std::string& ip) {
+void AuthManager::register_successful_login(const string& username, const string& ip) {
     string key = make_key(username, ip);
     lock_guard<mutex> g(attempts_mtx_);
     attempts_.erase(key);
 }
 
-bool AuthManager::ldap_check_credentials(const std::string& username,
-                                         const std::string& password,
-                                         std::string& err)
+bool AuthManager::ldap_check_credentials(const string& username,
+                                         const string& password,
+                                         string& err)
 {
     // ----------------------------
     // LDAP Configuration
     // ----------------------------
-    const std::string ldapUri = "ldap://ldap.technikum-wien.at:389";
+    const string ldapUri = "ldap://ldap.technikum-wien.at:389";
     const int ldapVersion = LDAP_VERSION3;
 
-    std::string bindDn = "uid=" + username + ",ou=people,dc=technikum-wien,dc=at";
+    string bindDn = "uid=" + username + ",ou=people,dc=technikum-wien,dc=at";
 
     // ----------------------------
     // Initialize LDAP
@@ -78,14 +70,14 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     LDAP* ld = nullptr;
     int rc = ldap_initialize(&ld, ldapUri.c_str());
     if (rc != LDAP_SUCCESS) {
-        std::cerr << "ldap_initialize failed: " << ldap_err2string(rc) << std::endl;
+        cerr << "ldap_initialize failed: " << ldap_err2string(rc) << endl;
         return false;
     }
-    std::cout << "connected to LDAP server " << ldapUri << std::endl;
+    cout << "connected to LDAP server " << ldapUri << endl;
 
     rc = ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &ldapVersion);
     if (rc != LDAP_OPT_SUCCESS) {
-        std::cerr << "ldap_set_option(PROTOCOL_VERSION): " << ldap_err2string(rc) << std::endl;
+        cerr << "ldap_set_option(PROTOCOL_VERSION): " << ldap_err2string(rc) << endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return false;
     }
@@ -95,7 +87,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
     // ----------------------------
     rc = ldap_start_tls_s(ld, nullptr, nullptr);
     if (rc != LDAP_SUCCESS) {
-        std::cerr << "ldap_start_tls_s(): " << ldap_err2string(rc) << std::endl;
+        cerr << "ldap_start_tls_s(): " << ldap_err2string(rc) << endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return false;
     }
@@ -110,7 +102,7 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
 
     rc = ldap_sasl_bind_s(ld, bindDn.c_str(), LDAP_SASL_SIMPLE, &cred, nullptr, nullptr, &servercredp);
     if (rc != LDAP_SUCCESS) {
-        std::cerr << "LDAP bind error: " << ldap_err2string(rc) << std::endl;
+        cerr << "LDAP bind error: " << ldap_err2string(rc) << endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return false;
     }
@@ -121,10 +113,10 @@ bool AuthManager::ldap_check_credentials(const std::string& username,
 //
 //  AUTHENTICATE WRAPPER
 //
-bool AuthManager::authenticate(const std::string& username,
-                               const std::string& password,
-                               const std::string& client_ip,
-                               std::string& err)
+bool AuthManager::authenticate(const string& username,
+                               const string& password,
+                               const string& client_ip,
+                               string& err)
 {
     blacklist_ -> garbage_collect();
 

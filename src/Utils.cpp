@@ -1,32 +1,26 @@
 #include "Utils.hpp"
-#include <algorithm>
-#include <cctype>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <iostream>
 
-std::string trim_newline(const std::string& s) {
-    std::string out = s;
+string trim_newline(const string& s) {
+    string out = s;
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
     return out;
 }
 
-bool valid_username(const std::string& u) {
+bool valid_username(const string& u) {
     if (u.empty() || u.size() > 64) return false;
     for (char c : u) {
-        if (!(std::isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.')) return false;
+        if (!(isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.')) return false;
     }
     return true;
 }
 
-bool valid_subject(const std::string& s) {
+bool valid_subject(const string& s) {
     // allow reasonably sized subjects only
     if (s.size() > 256) return false;
     return true;
 }
 
-int send_all(int sockfd, const std::string& data) {
+int send_all(int sockfd, const string& data) {
     const char* ptr = data.c_str();
     size_t left = data.size();
     while (left > 0) {
@@ -42,7 +36,7 @@ int send_all(int sockfd, const std::string& data) {
     return 0;
 }
 
-bool recv_line(int sockfd, std::string& out) {
+bool recv_line(int sockfd, string& out) {
     out.clear();
     char buf;
     bool got_any = false;

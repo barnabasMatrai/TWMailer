@@ -1,15 +1,5 @@
 #include "TWMailerClient.hpp"
 #include "Utils.hpp"
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <iostream>
-#include <sstream>
-#include <cstring>
-
-using std::string;
-using std::cout;
-using std::cerr;
-using std::endl;
 
 TWMailerClient::TWMailerClient(const string& server_ip_, int port_)
     : server_ip(server_ip_), port(port_), socket_fd(-1) {
@@ -23,7 +13,7 @@ TWMailerClient::~TWMailerClient() {
     }
 }
 
-bool TWMailerClient::createSocket() {
+bool TWMailerClient::create_socket() {
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == -1) {
         perror("socket");
@@ -32,8 +22,8 @@ bool TWMailerClient::createSocket() {
     return true;
 }
 
-bool TWMailerClient::connectToServer() {
-    if (!createSocket()) return false;
+bool TWMailerClient::connect_to_server() {
+    if (!create_socket()) return false;
     sockaddr_in addr{};
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -49,25 +39,25 @@ bool TWMailerClient::connectToServer() {
     return true;
 }
 
-bool TWMailerClient::recv_line_std(std::string& out) {
+bool TWMailerClient::recv_line_std(string& out) {
     return recv_line(socket_fd, out);
 }
 
 bool TWMailerClient::recv_line_and_print() {
-    std::string line;
+    string line;
     if (!recv_line_std(line)) return false;
     cout << line;
     return true;
 }
 
-void TWMailerClient::send_raw(const std::string& s) {
+void TWMailerClient::send_raw(const string& s) {
     if (send_all(socket_fd, s) < 0) {
-        throw std::runtime_error("send failed");
+        throw runtime_error("send failed");
     }
 }
 
 void TWMailerClient::run() {
-    if (!connectToServer()) {
+    if (!connect_to_server()) {
         cerr << "Connection failed" << endl;
         return;
     }
@@ -77,40 +67,39 @@ void TWMailerClient::run() {
     bool logged_in = false;
     string session_user;
 
-    // optionally read greeting
-    std::string greeting;
+    string greeting;
     if (recv_line_std(greeting)) {
         cout << "<< " << trim_newline(greeting) << endl;
     }
 
     while (true) {
         cout << "> ";
-        if (!std::getline(std::cin, cmd)) break;
+        if (!getline(cin, cmd)) break;
         if (cmd.empty()) continue;
 
-        std::istringstream iss(cmd);
-        string w; iss >> w;
-        for (auto &c : w) c = std::toupper((unsigned char)c);
+        istringstream iss(cmd);
+        string input; iss >> input;
+        for (auto &c : input) c = toupper((unsigned char)c);
 
-        if (w == "LOGIN") {
+        if (input == "LOGIN") {
             string user, pass;
-            cout << "Username: "; if (!std::getline(std::cin, user)) break;
+            cout << "Username: "; if (!getline(cin, user)) break;
             termios oldt, newt;
             tcgetattr(STDIN_FILENO, &oldt);
             newt = oldt;
             newt.c_lflag &= ~ECHO;
             tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
-            cout << "Password: "; if (!std::getline(std::cin, pass)) break;
+            cout << "Password: "; if (!getline(cin, pass)) break;
             cout << endl;
 
             tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-            std::ostringstream out;
-            out << "LOGIN\n" << user << "\n" << pass << "\n";
-            try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+            ostringstream out;
+            out << "LOGIN" << endl << user << endl << pass << endl;
+            try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
 
             string resp;
-            if (!recv_line_std(resp)) { cerr << "Server disconnected\n"; break; }
+            if (!recv_line_std(resp)) { cerr << "Server disconnected" << endl; break; }
             resp = trim_newline(resp);
             if (resp == "OK") {
                 logged_in = true;
@@ -119,7 +108,7 @@ void TWMailerClient::run() {
             } else {
                 cout << "Login failed." << endl;
             }
-        } else if (w == "QUIT") {
+        } else if (input == "QUIT") {
             try {
                 send_raw(string("QUIT\n"));
             } catch(...) {}
@@ -131,52 +120,52 @@ void TWMailerClient::run() {
                 continue;
             }
 
-            if (w == "SEND") {
+            if (input == "SEND") {
                 string receiver, subject;
-                cout << "Receiver: "; getline(std::cin, receiver);
-                cout << "Subject: "; getline(std::cin, subject);
+                cout << "Receiver: "; getline(cin, receiver);
+                cout << "Subject: "; getline(cin, subject);
                 if (!valid_username(receiver) || !valid_subject(subject)) {
                     cout << "Invalid receiver/subject" << endl;
                     continue;
                 }
-                std::ostringstream out;
-                out << "SEND\n" << receiver << "\n" << subject << "\n";
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+                ostringstream out;
+                out << "SEND" << endl << receiver << endl << subject << endl;
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
 
                 cout << "Enter message body. End with single dot on a line:" << endl;
                 while (true) {
                     string line;
-                    if (!getline(std::cin, line)) break;
+                    if (!getline(cin, line)) break;
                     if (line == ".") break;
                     string sendline = line + "\n";
-                    if (send_all(socket_fd, sendline) < 0) { cerr << "Send failed\n"; break; }
+                    if (send_all(socket_fd, sendline) < 0) { cerr << "Send failed" << endl; break; }
                 }
-                if (send_all(socket_fd, ".\n") < 0) { cerr << "Send failed\n"; break; }
+                if (send_all(socket_fd, ".\n") < 0) { cerr << "Send failed" << endl; break; }
 
                 string resp;
-                if (!recv_line_std(resp)) { cerr << "Server disconnected\n"; break; }
+                if (!recv_line_std(resp)) { cerr << "Server disconnected" << endl; break; }
                 cout << "<< " << trim_newline(resp) << endl;
 
-            } else if (w == "LIST") {
-                try { send_raw(string("LIST\n")); } catch(...) { cerr << "Send failed\n"; break; }
+            } else if (input == "LIST") {
+                try { send_raw(string("LIST\n")); } catch(...) { cerr << "Send failed" << endl; break; }
                 string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
                 line = trim_newline(line);
                 cout << "Server: " << line << endl;
                 int count = 0;
-                try { count = std::stoi(line); } catch(...) { count = 0; }
+                try { count = stoi(line); } catch(...) { count = 0; }
                 for (int i = 0; i < count; ++i) {
-                    if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                    if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
                     cout << (i+1) << ": " << trim_newline(line) << endl;
                 }
-            } else if (w == "READ") {
+            } else if (input == "READ") {
                 cout << "Message-Number: ";
-                string num; getline(std::cin, num);
-                std::ostringstream out;
-                out << "READ\n" << num << "\n";
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+                string num; getline(cin, num);
+                ostringstream out;
+                out << "READ" << endl << num << endl;
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
                 string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
                 if (trim_newline(line) != "OK") {
                     cout << "Server: ERR" << endl;
                     continue;
@@ -184,25 +173,25 @@ void TWMailerClient::run() {
                 // read message header/body
                 string sender, receiver, subject;
                 if (!recv_line_std(sender) || !recv_line_std(receiver) || !recv_line_std(subject)) {
-                    cerr << "Server disconnected\n"; break;
+                    cerr << "Server disconnected" << endl; break;
                 }
                 cout << "Sender: " << trim_newline(sender) << endl;
                 cout << "Receiver: " << trim_newline(receiver) << endl;
                 cout << "Subject: " << trim_newline(subject) << endl;
                 cout << "Body:" << endl;
                 while (true) {
-                    if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                    if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
                     if (trim_newline(line) == ".") break;
                     cout << line;
                 }
-            } else if (w == "DEL") {
+            } else if (input == "DEL") {
                 cout << "Message-Number: ";
-                string num; getline(std::cin, num);
-                std::ostringstream out;
-                out << "DEL\n" << num << "\n";
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed\n"; break; }
+                string num; getline(cin, num);
+                ostringstream out;
+                out << "DEL" << endl << num << endl;
+                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
                 string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected\n"; break; }
+                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
                 cout << "<< " << trim_newline(line) << endl;
             } else {
                 cout << "Unknown command" << endl;
