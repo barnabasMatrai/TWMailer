@@ -63,7 +63,7 @@ void TWMailerClient::run() {
     }
 
     cout << "Connected. You must LOGIN first." << endl;
-    string cmd;
+
     bool logged_in = false;
     string session_user;
 
@@ -74,128 +74,251 @@ void TWMailerClient::run() {
 
     while (true) {
         cout << "> ";
+        string cmd;
         if (!getline(cin, cmd)) break;
         if (cmd.empty()) continue;
 
         istringstream iss(cmd);
-        string input; iss >> input;
-        for (auto &c : input) c = toupper((unsigned char)c);
+        string input;
+        iss >> input;
+        for (char &c : input) c = toupper((unsigned char)c);
 
         if (input == "LOGIN") {
-            string user, pass;
-            cout << "Username: "; if (!getline(cin, user)) break;
-            termios oldt, newt;
-            tcgetattr(STDIN_FILENO, &oldt);
-            newt = oldt;
-            newt.c_lflag &= ~ECHO;
-            tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-
-            cout << "Password: "; if (!getline(cin, pass)) break;
-            cout << endl;
-
-            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-            ostringstream out;
-            out << "LOGIN" << endl << user << endl << pass << endl;
-            try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
-
-            string resp;
-            if (!recv_line_std(resp)) { cerr << "Server disconnected" << endl; break; }
-            resp = trim_newline(resp);
-            if (resp == "OK") {
-                logged_in = true;
-                session_user = user;
-                cout << "Login OK." << endl;
-            } else {
-                cout << "Login failed." << endl;
-            }
+            handle_login(logged_in, session_user);
         } else if (input == "QUIT") {
-            try {
-                send_raw(string("QUIT\n"));
-            } catch(...) {}
-            cout << "Disconnected" << endl;
+            handle_quit();
             break;
         } else {
             if (!logged_in) {
                 cout << "You must LOGIN first." << endl;
                 continue;
             }
-
             if (input == "SEND") {
-                string receiver, subject;
-                cout << "Receiver: "; getline(cin, receiver);
-                cout << "Subject: "; getline(cin, subject);
-                if (!valid_username(receiver) || !valid_subject(subject)) {
-                    cout << "Invalid receiver/subject" << endl;
-                    continue;
-                }
-                ostringstream out;
-                out << "SEND" << endl << receiver << endl << subject << endl;
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
-
-                cout << "Enter message body. End with single dot on a line:" << endl;
-                while (true) {
-                    string line;
-                    if (!getline(cin, line)) break;
-                    if (line == ".") break;
-                    string sendline = line + "\n";
-                    if (send_all(socket_fd, sendline) < 0) { cerr << "Send failed" << endl; break; }
-                }
-                if (send_all(socket_fd, ".\n") < 0) { cerr << "Send failed" << endl; break; }
-
-                string resp;
-                if (!recv_line_std(resp)) { cerr << "Server disconnected" << endl; break; }
-                cout << "<< " << trim_newline(resp) << endl;
-
+                handle_send();
             } else if (input == "LIST") {
-                try { send_raw(string("LIST\n")); } catch(...) { cerr << "Send failed" << endl; break; }
-                string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
-                line = trim_newline(line);
-                cout << "Server: " << line << endl;
-                int count = 0;
-                try { count = stoi(line); } catch(...) { count = 0; }
-                for (int i = 0; i < count; ++i) {
-                    if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
-                    cout << (i+1) << ": " << trim_newline(line) << endl;
-                }
+                handle_list();
             } else if (input == "READ") {
-                cout << "Message-Number: ";
-                string num; getline(cin, num);
-                ostringstream out;
-                out << "READ" << endl << num << endl;
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
-                string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
-                if (trim_newline(line) != "OK") {
-                    cout << "Server: ERR" << endl;
-                    continue;
-                }
-                // read message header/body
-                string sender, receiver, subject;
-                if (!recv_line_std(sender) || !recv_line_std(receiver) || !recv_line_std(subject)) {
-                    cerr << "Server disconnected" << endl; break;
-                }
-                cout << "Sender: " << trim_newline(sender) << endl;
-                cout << "Receiver: " << trim_newline(receiver) << endl;
-                cout << "Subject: " << trim_newline(subject) << endl;
-                cout << "Body:" << endl;
-                while (true) {
-                    if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
-                    if (trim_newline(line) == ".") break;
-                    cout << line;
-                }
+                handle_read();
             } else if (input == "DEL") {
-                cout << "Message-Number: ";
-                string num; getline(cin, num);
-                ostringstream out;
-                out << "DEL" << endl << num << endl;
-                try { send_raw(out.str()); } catch(...) { cerr << "Send failed" << endl; break; }
-                string line;
-                if (!recv_line_std(line)) { cerr << "Server disconnected" << endl; break; }
-                cout << "<< " << trim_newline(line) << endl;
+                handle_delete();
             } else {
-                cout << "Unknown command" << endl;
+                handle_unknown();
             }
         }
     }
+}
+
+void TWMailerClient::handle_login(bool &logged_in, string &session_user) {
+    string user, pass;
+
+    cout << "Username: ";
+    if (!getline(cin, user)) return;
+
+    // Disable echo for password input
+    termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+    cout << "Password: ";
+    if (!getline(cin, pass)) return;
+    cout << endl;
+
+    // Restore terminal echo
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+
+    ostringstream out;
+    out << "LOGIN\n" << user << endl << pass << endl;
+
+    try {
+        send_raw(out.str());
+    } catch (...) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    string resp;
+    if (!recv_line_std(resp)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    resp = trim_newline(resp);
+    if (resp == "OK") {
+        logged_in = true;
+        session_user = user;
+        cout << "Login OK." << endl;
+    } else {
+        cout << "Login failed." << endl;
+    }
+}
+
+void TWMailerClient::handle_quit() {
+    try {
+        send_raw("QUIT\n");
+    } catch (...) {}
+    cout << "Disconnected" << endl;
+}
+
+void TWMailerClient::handle_send() {
+    string receiver, subject;
+
+    cout << "Receiver: ";
+    getline(cin, receiver);
+    cout << "Subject: ";
+    getline(cin, subject);
+
+    if (!valid_username(receiver) || !valid_subject(subject)) {
+        cout << "Invalid receiver/subject" << endl;
+        return;
+    }
+
+    ostringstream out;
+    out << "SEND\n" << receiver << endl << subject << endl;
+
+    try {
+        send_raw(out.str());
+    } catch (...) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    cout << "Enter message body. End with single dot on a line:" << endl;
+    while (true) {
+        string line;
+        if (!getline(cin, line)) break;
+        if (line == ".") break;
+
+        string sendline = line + "\n";
+        if (send_all(socket_fd, sendline) < 0) {
+            cerr << "Send failed" << endl;
+            return;
+        }
+    }
+
+    if (send_all(socket_fd, ".\n") < 0) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    string resp;
+    if (!recv_line_std(resp)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    cout << "<< " << trim_newline(resp) << endl;
+}
+
+void TWMailerClient::handle_list() {
+    try {
+        send_raw("LIST\n");
+    } catch (...) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    string line;
+    if (!recv_line_std(line)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    line = trim_newline(line);
+    cout << "Server: " << line << endl;
+
+    int count = 0;
+    try {
+        count = stoi(line);
+    } catch (...) {
+        count = 0;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        if (!recv_line_std(line)) {
+            cerr << "Server disconnected" << endl;
+            return;
+        }
+        cout << (i + 1) << ": " << trim_newline(line) << endl;
+    }
+}
+
+void TWMailerClient::handle_read() {
+    cout << "Message-Number: ";
+    string num;
+    getline(cin, num);
+
+    ostringstream out;
+    out << "READ\n" << num << endl;
+
+    try {
+        send_raw(out.str());
+    } catch (...) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    string line;
+    if (!recv_line_std(line)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    if (trim_newline(line) != "OK") {
+        cout << "Server: ERR" << endl;
+        return;
+    }
+
+    // header
+    string sender, receiver, subject;
+    if (!recv_line_std(sender) ||
+        !recv_line_std(receiver) ||
+        !recv_line_std(subject)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    cout << "Sender: "   << trim_newline(sender)   << endl;
+    cout << "Receiver: " << trim_newline(receiver) << endl;
+    cout << "Subject: "  << trim_newline(subject)  << endl;
+    cout << "Body:" << endl;
+
+    // body
+    while (true) {
+        if (!recv_line_std(line)) {
+            cerr << "Server disconnected" << endl;
+            return;
+        }
+        if (trim_newline(line) == ".") break;
+        cout << line;
+    }
+}
+
+void TWMailerClient::handle_delete() {
+    cout << "Message-Number: ";
+    string num;
+    getline(cin, num);
+
+    ostringstream out;
+    out << "DEL\n" << num << endl;
+
+    try {
+        send_raw(out.str());
+    } catch (...) {
+        cerr << "Send failed" << endl;
+        return;
+    }
+
+    string line;
+    if (!recv_line_std(line)) {
+        cerr << "Server disconnected" << endl;
+        return;
+    }
+
+    cout << "<< " << trim_newline(line) << endl;
+}
+
+void TWMailerClient::handle_unknown() {
+    cout << "Unknown command" << endl;
 }

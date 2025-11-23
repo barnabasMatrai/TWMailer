@@ -12,26 +12,34 @@ Blacklist::Blacklist(const string& file_path) : file_path_(file_path) {}
 Blacklist::~Blacklist() { save(); }
 
 bool Blacklist::load() {
-    lock_guard<mutex> g(mtx_);
+    lock_guard<mutex> guard(mtx_);
     ifstream ifs(file_path_);
-    if (!ifs.is_open()) return false;
+    if (!ifs.is_open()) {
+        return false;
+    }
     map_.clear();
     string line;
     while (getline(ifs, line)) {
-        if (line.empty()) continue;
+        if (line.empty()) {
+            continue;
+        }
         istringstream iss(line);
         string ip;
         long long ms;
-        if (!(iss >> ip >> ms)) continue;
+        if (!(iss >> ip >> ms)) {
+            continue;
+        }
         map_[ip] = ms_to_tp(ms);
     }
     return true;
 }
 
 bool Blacklist::save() {
-    lock_guard<mutex> g(mtx_);
+    lock_guard<mutex> guard(mtx_);
     ofstream ofs(file_path_, ofstream::trunc);
-    if (!ofs.is_open()) return false;
+    if (!ofs.is_open()) {
+        return false;
+    }
     for (auto& p : map_) {
         ofs << p.first << " " << tp_to_ms(p.second) << endl;
     }
@@ -39,25 +47,31 @@ bool Blacklist::save() {
 }
 
 void Blacklist::add(const string& ip, const clk::time_point& until) {
-    lock_guard<mutex> g(mtx_);
+    lock_guard<mutex> guard(mtx_);
     map_[ip] = until;
 }
 
 void Blacklist::garbage_collect() {
-    lock_guard<mutex> g(mtx_);
+    lock_guard<mutex> guard(mtx_);
     auto now = clk::now();
-    for (auto it = map_.begin(); it != map_.end(); ) {
-        if (it -> second <= now) it = map_.erase(it);
-        else ++it;
+    for (auto iterator = map_.begin(); iterator != map_.end(); ) {
+        if (iterator -> second <= now) {
+            iterator = map_.erase(iterator);
+        }
+        else {
+            ++iterator;
+        }
     }
 }
 
 bool Blacklist::is_blocked(const string& ip) {
-    lock_guard<mutex> g(mtx_);
-    auto it = map_.find(ip);
-    if (it == map_.end()) return false;
-    if (it -> second <= clk::now()) {
-        map_.erase(it);
+    lock_guard<mutex> guard(mtx_);
+    auto iterator = map_.find(ip);
+    if (iterator == map_.end()) {
+        return false;
+    }
+    if (iterator -> second <= clk::now()) {
+        map_.erase(iterator);
         return false;
     }
     return true;

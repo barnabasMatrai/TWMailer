@@ -32,6 +32,14 @@ private:
 
     bool create_socket();
     bool connect_to_server();
+    
+    void handle_login(bool &logged_in, string &session_user);
+    void handle_quit();
+    void handle_send();
+    void handle_list();
+    void handle_read();
+    void handle_delete();
+    void handle_unknown();
 
     bool recv_line_std(string& out);
     bool recv_line_and_print();

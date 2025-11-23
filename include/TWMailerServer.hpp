@@ -38,22 +38,22 @@ private:
 
     int create_socket;
 
-    void setupSignalHandler();
-    void createSocket();
-    void setSocketOptions();
-    void bindSocket();
-    void listenSocket();
+    void setup_signal_handler();
+    void create_server_socket();
+    void set_socket_options();
+    void bind_socket();
+    void listen_socket();
 
-    void clientThread(int clientfd, string client_ip);
+    void client_thread(int clientfd, string client_ip);
 
     // command handlers (authenticated)
-    bool readDotTerminatedBody(int sockfd, string& body);
-    void handleSendAuthenticated(int clientfd, const string& sender);
-    void handleListAuthenticated(int clientfd, const string& username);
-    void handleReadAuthenticated(int clientfd, const string& username);
-    void handleDelAuthenticated(int clientfd, const string& username);
+    bool read_dot_terminated_body(int sockfd, string& body);
+    void handle_send(int clientfd, const string& sender);
+    void handle_list(int clientfd, const string& username);
+    void handle_read(int clientfd, const string& username);
+    void handle_delete(int clientfd, const string& username);
 
-    static void signalHandler(int sig);
+    static void signal_handler(int sig);
 };
 
 #endif // TWMAILERSERVER_HPP

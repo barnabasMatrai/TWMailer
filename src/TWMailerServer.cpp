@@ -8,11 +8,11 @@ TWMailerServer::TWMailerServer(int port_, const string& spoolDir)
       authManager("ldap://ldap.technikum.wien.at", "dc=technikum-wien,dc=at", spoolDir + "/blacklist.db"),
       create_socket(-1)
 {
-    setupSignalHandler();
-    createSocket();
-    setSocketOptions();
-    bindSocket();
-    listenSocket();
+    setup_signal_handler();
+    create_server_socket();
+    set_socket_options();
+    bind_socket();
+    listen_socket();
 
     string err;
     if (!store.ensure_spool_ok(err)) {
@@ -29,14 +29,14 @@ TWMailerServer::~TWMailerServer() {
     }
 }
 
-void TWMailerServer::setupSignalHandler() {
-    if (signal(SIGINT, TWMailerServer::signalHandler) == SIG_ERR) {
+void TWMailerServer::setup_signal_handler() {
+    if (signal(SIGINT, TWMailerServer::signal_handler) == SIG_ERR) {
         perror("signal cannot be registered");
         exit(EXIT_FAILURE);
     }
 }
 
-void TWMailerServer::createSocket() {
+void TWMailerServer::create_server_socket() {
     create_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (create_socket == -1) {
         perror("socket");
@@ -44,7 +44,7 @@ void TWMailerServer::createSocket() {
     }
 }
 
-void TWMailerServer::setSocketOptions() {
+void TWMailerServer::set_socket_options() {
     int reuseValue = 1;
     if (setsockopt(create_socket, SOL_SOCKET, SO_REUSEADDR, &reuseValue, sizeof(reuseValue)) == -1) {
         perror("setsockopt SO_REUSEADDR");
@@ -52,7 +52,7 @@ void TWMailerServer::setSocketOptions() {
     }
 }
 
-void TWMailerServer::bindSocket() {
+void TWMailerServer::bind_socket() {
     sockaddr_in address{};
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
@@ -65,7 +65,7 @@ void TWMailerServer::bindSocket() {
     }
 }
 
-void TWMailerServer::listenSocket() {
+void TWMailerServer::listen_socket() {
     if (listen(create_socket, 16) == -1) {
         perror("listen");
         exit(EXIT_FAILURE);
@@ -91,14 +91,14 @@ int TWMailerServer::run() {
 
         cout << "Client connected from " << client_ip << ":" << client_port << endl;
 
-        thread worker(&TWMailerServer::clientThread, this, new_socket, client_ip);
+        thread worker(&TWMailerServer::client_thread, this, new_socket, client_ip);
         worker.detach();
     }
 
     return EXIT_SUCCESS;
 }
 
-void TWMailerServer::clientThread(int clientfd, string client_ip) {
+void TWMailerServer::client_thread(int clientfd, string client_ip) {
     bool authenticated = false;
     string session_user;
 
@@ -148,13 +148,13 @@ void TWMailerServer::clientThread(int clientfd, string client_ip) {
             }
 
             if (cmd == "SEND") {
-                handleSendAuthenticated(clientfd, session_user);
+                handle_send(clientfd, session_user);
             } else if (cmd == "LIST") {
-                handleListAuthenticated(clientfd, session_user);
+                handle_list(clientfd, session_user);
             } else if (cmd == "READ") {
-                handleReadAuthenticated(clientfd, session_user);
+                handle_read(clientfd, session_user);
             } else if (cmd == "DEL") {
-                handleDelAuthenticated(clientfd, session_user);
+                handle_delete(clientfd, session_user);
             } else {
                 send_all(clientfd, "ERR\n");
             }
@@ -166,7 +166,7 @@ void TWMailerServer::clientThread(int clientfd, string client_ip) {
     cout << "Client (" << client_ip << ") disconnected." << endl;
 }
 
-bool TWMailerServer::readDotTerminatedBody(int sockfd, string& body) {
+bool TWMailerServer::read_dot_terminated_body(int sockfd, string& body) {
     body.clear();
     string line;
     bool first = true;
@@ -185,7 +185,7 @@ bool TWMailerServer::readDotTerminatedBody(int sockfd, string& body) {
     return true;
 }
 
-void TWMailerServer::handleSendAuthenticated(int clientfd, const string& sender) {
+void TWMailerServer::handle_send(int clientfd, const string& sender) {
     string receiver, subject, body;
     if (!recv_line(clientfd, receiver) || !recv_line(clientfd, subject)) {
         send_all(clientfd, "ERR\n");
@@ -199,7 +199,7 @@ void TWMailerServer::handleSendAuthenticated(int clientfd, const string& sender)
         return;
     }
 
-    if (!readDotTerminatedBody(clientfd, body)) {
+    if (!read_dot_terminated_body(clientfd, body)) {
         send_all(clientfd, "ERR\n");
         return;
     }
@@ -218,7 +218,7 @@ void TWMailerServer::handleSendAuthenticated(int clientfd, const string& sender)
     send_all(clientfd, "OK\n");
 }
 
-void TWMailerServer::handleListAuthenticated(int clientfd, const string& username) {
+void TWMailerServer::handle_list(int clientfd, const string& username) {
     vector<string> subjects;
     {
         lock_guard<mutex> lg(store_mutex);
@@ -233,7 +233,7 @@ void TWMailerServer::handleListAuthenticated(int clientfd, const string& usernam
     send_all(clientfd, oss.str());
 }
 
-void TWMailerServer::handleReadAuthenticated(int clientfd, const string& username) {
+void TWMailerServer::handle_read(int clientfd, const string& username) {
     string numStr;
     if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
@@ -266,13 +266,15 @@ void TWMailerServer::handleReadAuthenticated(int clientfd, const string& usernam
     oss << msg.subject << "\n";
     if (!msg.body.empty()) {
         oss << msg.body;
-        if (msg.body.back() != '\n') oss << "\n";
+        if (msg.body.back() != '\n') {
+            oss << "\n";
+        }
     }
     oss << ".\n";
     send_all(clientfd, oss.str());
 }
 
-void TWMailerServer::handleDelAuthenticated(int clientfd, const string& username) {
+void TWMailerServer::handle_delete(int clientfd, const string& username) {
     string numStr;
     if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
@@ -298,7 +300,7 @@ void TWMailerServer::handleDelAuthenticated(int clientfd, const string& username
     send_all(clientfd, "OK\n");
 }
 
-void TWMailerServer::signalHandler(int sig) {
+void TWMailerServer::signal_handler(int sig) {
     if (sig == SIGINT) {
         cout << "\nAbort requested..." << endl;
         abortRequested = 1;
