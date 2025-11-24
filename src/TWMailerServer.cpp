@@ -1,8 +1,10 @@
 #include "TWMailerServer.hpp"
 #include "Utils.hpp"
 
+// global abort flag, set by SIGINT handler
 volatile sig_atomic_t TWMailerServer::abortRequested = 0;
 
+// Constructor: initialize server, auth manager, message store, and TCP socket
 TWMailerServer::TWMailerServer(int port_, const string& spoolDir)
     : port(port_), mailSpoolDir(spoolDir), store(spoolDir),
       authManager("ldap://ldap.technikum.wien.at", "dc=technikum-wien,dc=at", spoolDir + "/blacklist.db"),
@@ -14,6 +16,7 @@ TWMailerServer::TWMailerServer(int port_, const string& spoolDir)
     bind_socket();
     listen_socket();
 
+    // Ensure spool directories/files exist
     string err;
     if (!store.ensure_spool_ok(err)) {
         cerr << "Mail spool setup failed: " << err << endl;
@@ -21,6 +24,7 @@ TWMailerServer::TWMailerServer(int port_, const string& spoolDir)
     }
 }
 
+// Destructor: clean shutdown of the listening socket
 TWMailerServer::~TWMailerServer() {
     if (create_socket != -1) {
         shutdown(create_socket, SHUT_RDWR);
@@ -29,6 +33,7 @@ TWMailerServer::~TWMailerServer() {
     }
 }
 
+// Installs SIGINT signal handler for graceful shutdown
 void TWMailerServer::setup_signal_handler() {
     if (signal(SIGINT, TWMailerServer::signal_handler) == SIG_ERR) {
         perror("signal cannot be registered");
@@ -36,6 +41,7 @@ void TWMailerServer::setup_signal_handler() {
     }
 }
 
+// Creates the server's TCP listening socket
 void TWMailerServer::create_server_socket() {
     create_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (create_socket == -1) {
@@ -44,6 +50,7 @@ void TWMailerServer::create_server_socket() {
     }
 }
 
+// Configures socket options (SO_REUSEADDR)
 void TWMailerServer::set_socket_options() {
     int reuseValue = 1;
     if (setsockopt(create_socket, SOL_SOCKET, SO_REUSEADDR, &reuseValue, sizeof(reuseValue)) == -1) {
@@ -52,6 +59,7 @@ void TWMailerServer::set_socket_options() {
     }
 }
 
+// Binds the listening socket to the given port on all interfaces
 void TWMailerServer::bind_socket() {
     sockaddr_in address{};
     memset(&address, 0, sizeof(address));
@@ -65,6 +73,7 @@ void TWMailerServer::bind_socket() {
     }
 }
 
+// Configures socket to begin listening for incoming connections
 void TWMailerServer::listen_socket() {
     if (listen(create_socket, 16) == -1) {
         perror("listen");
@@ -72,6 +81,7 @@ void TWMailerServer::listen_socket() {
     }
 }
 
+// Main server loop: accepts connections and launches worker threads
 int TWMailerServer::run() {
     sockaddr_in cliaddress{};
     socklen_t addrlen = sizeof(cliaddress);
@@ -79,6 +89,7 @@ int TWMailerServer::run() {
     while (!abortRequested) {
         cout << "Waiting for connections..." << endl;
 
+        // Accept connection from client
         int new_socket = accept(create_socket, reinterpret_cast<sockaddr*>(&cliaddress), &addrlen);
         if (new_socket == -1) {
             if (abortRequested) perror("accept after abort");
@@ -91,6 +102,7 @@ int TWMailerServer::run() {
 
         cout << "Client connected from " << client_ip << ":" << client_port << endl;
 
+        // Each client handled in separate detached thread
         thread worker(&TWMailerServer::client_thread, this, new_socket, client_ip);
         worker.detach();
     }
@@ -98,13 +110,15 @@ int TWMailerServer::run() {
     return EXIT_SUCCESS;
 }
 
+// Handles a single client connection lifecycle
 void TWMailerServer::client_thread(int clientfd, string client_ip) {
     bool authenticated = false;
     string session_user;
 
-    // welcome
+    // Send greeting
     send_all(clientfd, "OK\n");
 
+    // Immediately reject blacklisted IPs
     if (authManager.is_ip_blacklisted(client_ip)) {
         send_all(clientfd, "ERR\n");
         close(clientfd);
@@ -116,6 +130,7 @@ void TWMailerServer::client_thread(int clientfd, string client_ip) {
         if (!recv_line(clientfd, line)) break;
         string cmd = trim_newline(line);
 
+        // LOGIN command handling
         if (cmd == "LOGIN") {
             string username, password;
             if (!recv_line(clientfd, username) || !recv_line(clientfd, password)) {
@@ -125,12 +140,14 @@ void TWMailerServer::client_thread(int clientfd, string client_ip) {
             username = trim_newline(username);
             password = trim_newline(password);
 
+            // Prevent login attempts from blacklisted clients
             if (authManager.is_ip_blacklisted(client_ip)) {
                 send_all(clientfd, "ERR\n");
                 continue;
             }
 
             string err;
+            // Authenticate user via LDAP and blacklist manager
             if (authManager.authenticate(username, password, client_ip, err)) {
                 authenticated = true;
                 session_user = username;
@@ -138,10 +155,14 @@ void TWMailerServer::client_thread(int clientfd, string client_ip) {
             } else {
                 send_all(clientfd, "ERR\n");
             }
-        } else if (cmd == "QUIT") {
+        }
+        // QUIT command ends session
+        else if (cmd == "QUIT") {
             send_all(clientfd, "OK\n");
             break;
-        } else {
+        }
+        // All other commands require successful login
+        else {
             if (!authenticated) {
                 send_all(clientfd, "ERR\n");
                 continue;
@@ -161,22 +182,28 @@ void TWMailerServer::client_thread(int clientfd, string client_ip) {
         }
     }
 
+    // Cleanup and log disconnection
     shutdown(clientfd, SHUT_RDWR);
     close(clientfd);
     cout << "Client (" << client_ip << ") disconnected." << endl;
 }
 
+// Reads message body until single '.' line; stores into body string
 bool TWMailerServer::read_dot_terminated_body(int sockfd, string& body) {
     body.clear();
     string line;
     bool first = true;
+
     while (true) {
         if (!recv_line(sockfd, line)) {
             return false;
         }
+
+        // End of message body marker
         if (line == ".\n" || line == ".\r\n") {
             break;
         }
+
         string t = trim_newline(line);
         if (!first) body += "\n";
         body += t;
@@ -185,26 +212,34 @@ bool TWMailerServer::read_dot_terminated_body(int sockfd, string& body) {
     return true;
 }
 
+// Handles SEND command: validates fields, reads body, stores message
 void TWMailerServer::handle_send(int clientfd, const string& sender) {
     string receiver, subject, body;
+
     if (!recv_line(clientfd, receiver) || !recv_line(clientfd, subject)) {
         send_all(clientfd, "ERR\n");
         return;
     }
-    receiver = trim_newline(receiver);
-    subject = trim_newline(subject);
 
+    receiver = trim_newline(receiver);
+    subject  = trim_newline(subject);
+
+    // Validate basic syntax
     if (!valid_username(receiver) || !valid_subject(subject)) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
+    // Read DOT-terminated message body
     if (!read_dot_terminated_body(clientfd, body)) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
+    // Construct message struct
     Message msg{ "", sender, receiver, subject, body };
+
+    // Store under lock
     string err;
     {
         lock_guard<mutex> lg(store_mutex);
@@ -218,8 +253,10 @@ void TWMailerServer::handle_send(int clientfd, const string& sender) {
     send_all(clientfd, "OK\n");
 }
 
+// Handles LIST command: sends number of messages + subject lines
 void TWMailerServer::handle_list(int clientfd, const string& username) {
     vector<string> subjects;
+
     {
         lock_guard<mutex> lg(store_mutex);
         if (!store.list_subjects(username, subjects)) {
@@ -227,22 +264,26 @@ void TWMailerServer::handle_list(int clientfd, const string& username) {
             return;
         }
     }
+
     ostringstream oss;
     oss << subjects.size() << "\n";
     for (auto& s : subjects) oss << s << "\n";
     send_all(clientfd, oss.str());
 }
 
+// Handles READ command: retrieves full message and sends formatted output
 void TWMailerServer::handle_read(int clientfd, const string& username) {
     string numStr;
     if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
         return;
     }
+
     numStr = trim_newline(numStr);
+
     size_t num = 0;
     try {
-        num = stoul(numStr);
+        num = stoul(numStr);    // convert message index
     } catch (...) {
         send_all(clientfd, "ERR\n");
         return;
@@ -253,34 +294,41 @@ void TWMailerServer::handle_read(int clientfd, const string& username) {
         lock_guard<mutex> lg(store_mutex);
         msgOpt = store.read_message(username, num);
     }
+
     if (!msgOpt) {
         send_all(clientfd, "ERR\n");
         return;
     }
 
     auto& msg = *msgOpt;
+
+    // Build protocol-compliant message response
     ostringstream oss;
     oss << "OK\n";
-    oss << msg.sender << "\n";
+    oss << msg.sender   << "\n";
     oss << msg.receiver << "\n";
-    oss << msg.subject << "\n";
+    oss << msg.subject  << "\n";
+
     if (!msg.body.empty()) {
         oss << msg.body;
-        if (msg.body.back() != '\n') {
+        if (msg.body.back() != '\n')
             oss << "\n";
-        }
     }
     oss << ".\n";
+
     send_all(clientfd, oss.str());
 }
 
+// Handles DEL command: deletes message by index
 void TWMailerServer::handle_delete(int clientfd, const string& username) {
     string numStr;
     if (!recv_line(clientfd, numStr)) {
         send_all(clientfd, "ERR\n");
         return;
     }
+
     numStr = trim_newline(numStr);
+
     size_t num = 0;
     try {
         num = stoul(numStr);
@@ -297,14 +345,15 @@ void TWMailerServer::handle_delete(int clientfd, const string& username) {
             return;
         }
     }
+
     send_all(clientfd, "OK\n");
 }
 
+// SIGINT handler: triggers server shutdown
 void TWMailerServer::signal_handler(int sig) {
     if (sig == SIGINT) {
         cout << "\nAbort requested..." << endl;
         abortRequested = 1;
-        // closing of sockets is handled in destructor / run loop
     } else {
         exit(sig);
     }

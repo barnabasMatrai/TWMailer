@@ -1,15 +1,11 @@
-# ---------------------------------
 # COMPILER AND FLAGS
-# ---------------------------------
 CC = g++
 CFLAGS = -std=c++17 -Wall -g -Iinclude
 LDFLAGS = -pthread -lldap -llber
 
 OBJDIR = obj
 
-# ---------------------------------
 # OBJECT FILES
-# ---------------------------------
 
 SERVER_OBJS = \
     $(OBJDIR)/twmailer-server.o \
@@ -24,15 +20,11 @@ CLIENT_OBJS = \
     $(OBJDIR)/TWMailerClient.o \
     $(OBJDIR)/Utils.o
 
-# ---------------------------------
 # DEFAULT TARGET
-# ---------------------------------
 all: twmailer-server twmailer-client
 
 
-# ---------------------------------
 # SERVER BUILD
-# ---------------------------------
 twmailer-server: $(SERVER_OBJS)
 	$(CC) $(CFLAGS) -o twmailer-server $(SERVER_OBJS) $(LDFLAGS)
 
@@ -66,9 +58,7 @@ $(OBJDIR)/Blacklist.o: src/Blacklist.cpp include/Blacklist.hpp | $(OBJDIR)
 
 
 
-# ---------------------------------
 # CLIENT BUILD
-# ---------------------------------
 twmailer-client: $(CLIENT_OBJS)
 	$(CC) $(CFLAGS) -o twmailer-client $(CLIENT_OBJS) $(LDFLAGS)
 
@@ -84,16 +74,12 @@ $(OBJDIR)/TWMailerClient.o: src/TWMailerClient.cpp \
 
 
 
-# ---------------------------------
 # CREATE OBJ DIRECTORY
-# ---------------------------------
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
 
 
-# ---------------------------------
 # CLEAN
-# ---------------------------------
 clean:
 	rm -f $(OBJDIR)/*.o twmailer-server twmailer-client
